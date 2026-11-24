@@ -84,6 +84,52 @@
   }
 }
 
+/* Reader picks its own theme regardless of system setting */
+[data-reader-theme="light"] {
+  --background: oklch(0.955 0.018 82);   /* parchment */
+  --foreground: oklch(0.27 0.03 55);     /* dark soil */
+  --card: oklch(0.975 0.014 85);
+  --card-foreground: oklch(0.27 0.03 55);
+  --popover: oklch(0.975 0.014 85);
+  --popover-foreground: oklch(0.27 0.03 55);
+  --primary: oklch(0.47 0.07 135);       /* moss */
+  --primary-foreground: oklch(0.97 0.015 85);
+  --secondary: oklch(0.915 0.025 80);    /* sand */
+  --secondary-foreground: oklch(0.32 0.035 55);
+  --muted: oklch(0.91 0.022 80);
+  --muted-foreground: oklch(0.5 0.03 60);
+  --accent: oklch(0.9 0.03 78);
+  --accent-foreground: oklch(0.3 0.035 55);
+  --clay: oklch(0.6 0.115 45);           /* terracotta */
+  --destructive: oklch(0.55 0.17 30);
+  --border: oklch(0.86 0.025 75);
+  --input: oklch(0.86 0.025 75);
+  --ring: oklch(0.47 0.07 135);
+  --radius: 0.75rem;
+}
+
+[data-reader-theme="dark"] {
+    --background: oklch(0.2 0.015 60);   /* night soil */
+    --foreground: oklch(0.92 0.02 80);
+    --card: oklch(0.24 0.018 60);
+    --card-foreground: oklch(0.92 0.02 80);
+    --popover: oklch(0.24 0.018 60);
+    --popover-foreground: oklch(0.92 0.02 80);
+    --primary: oklch(0.72 0.08 135);
+    --primary-foreground: oklch(0.2 0.02 60);
+    --secondary: oklch(0.29 0.02 60);
+    --secondary-foreground: oklch(0.9 0.02 80);
+    --muted: oklch(0.29 0.02 60);
+    --muted-foreground: oklch(0.68 0.025 70);
+    --accent: oklch(0.31 0.022 60);
+    --accent-foreground: oklch(0.92 0.02 80);
+    --clay: oklch(0.7 0.11 45);
+    --destructive: oklch(0.68 0.16 30);
+    --border: oklch(0.34 0.02 60);
+    --input: oklch(0.34 0.02 60);
+    --ring: oklch(0.72 0.08 135);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
