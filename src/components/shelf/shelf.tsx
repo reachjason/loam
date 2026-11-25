@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Headphones, Plus, Sprout, X } from "lucide-react";
+import { Plus, Sprout, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { addEpub, listBooks, removeBook, type Book } from "@/lib/library";
 import { cn } from "@/lib/utils";
@@ -98,7 +98,7 @@ export function Shelf() {
   const empty = books !== null && books.length === 0;
 
   return (
-    <div className="relative z-10 mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 py-10 sm:py-16">
+    <div className="relative z-10 mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pt-[max(2rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] sm:px-5 sm:py-16">
       <input
         ref={inputRef}
         type="file"
@@ -120,7 +120,7 @@ export function Shelf() {
         <p className="font-serif text-2xl">Place it on the shelf</p>
       </div>
 
-      <header className="mb-14 flex items-center justify-between">
+      <header className="mb-8 flex items-center justify-between sm:mb-14">
         <div className="flex items-center gap-2.5">
           <span className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
             <Sprout className="size-4" />
@@ -128,11 +128,8 @@ export function Shelf() {
           <span className="font-serif text-2xl tracking-tight">Loam</span>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" className="text-muted-foreground" nativeButton={false} render={<Link href="/listen" />}>
-            <Headphones /> Listen
-          </Button>
           {!empty && books && (
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => inputRef.current?.click()} disabled={busy}>
+            <Button variant="ghost" size="sm" className="text-muted-foreground pointer-coarse:h-11 pointer-coarse:px-3" onClick={() => inputRef.current?.click()} disabled={busy}>
               <Plus /> Add
             </Button>
           )}
@@ -144,11 +141,15 @@ export function Shelf() {
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            className="flex w-full flex-col items-center gap-3 rounded-3xl border border-dashed border-border px-8 py-24 text-center transition-colors hover:border-primary/50 hover:bg-card/60"
+            className="flex w-full flex-col items-center gap-3 rounded-3xl border border-dashed border-border px-6 py-16 text-center sm:px-8 sm:py-24 transition-colors hover:border-primary/50 hover:bg-card/60"
           >
             <span className="font-serif text-2xl">{busy ? "Shelving…" : "Your shelf is empty"}</span>
             <span className="text-sm text-muted-foreground">
-              Drop an EPUB here, or <span className="text-primary underline underline-offset-4">choose one</span>
+              <span className="pointer-coarse:hidden">Drop an EPUB here, or </span>
+              <span className="text-primary underline underline-offset-4">
+                <span className="pointer-coarse:hidden">choose one</span>
+                <span className="hidden pointer-coarse:inline">Choose an EPUB</span>
+              </span>
             </span>
           </button>
         )}
@@ -163,7 +164,7 @@ export function Shelf() {
                 <li key={b.id} className="group relative">
                   <Link
                     href={`/read/${b.id}`}
-                    className="flex items-center gap-5 rounded-2xl px-3 py-3 transition-colors hover:bg-card/70"
+                    className="flex items-center gap-4 rounded-2xl py-3 pr-12 pl-2 transition-colors hover:bg-card/70 sm:gap-5 sm:px-3"
                   >
                     <Cover book={b} className="h-[72px] w-12" />
                     <div className="min-w-0 flex-1">
@@ -182,12 +183,12 @@ export function Shelf() {
                       )}
                     </div>
                   </Link>
-                  <div className="absolute top-1/2 right-3 -translate-y-1/2">
+                  <div className="absolute top-1/2 right-1 -translate-y-1/2 sm:right-3">
                     {confirmId === b.id ? (
                       <div className="flex items-center gap-1 rounded-full bg-card px-1 py-0.5 text-xs shadow-sm">
                         <span className="px-2 text-muted-foreground">Remove?</span>
                         <Button
-                          size="xs"
+                          size="sm"
                           variant="destructive"
                           onClick={async () => {
                             await removeBook(b.id);
@@ -197,17 +198,17 @@ export function Shelf() {
                         >
                           Remove
                         </Button>
-                        <Button size="xs" variant="ghost" onClick={() => setConfirmId(null)}>
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmId(null)}>
                           Keep
                         </Button>
                       </div>
                     ) : (
                       <Button
-                        size="icon-xs"
+                        size="icon-sm"
                         variant="ghost"
                         aria-label={`Remove ${b.title}`}
                         onClick={() => setConfirmId(b.id)}
-                        className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                        className="text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-11 pointer-coarse:opacity-60"
                       >
                         <X />
                       </Button>

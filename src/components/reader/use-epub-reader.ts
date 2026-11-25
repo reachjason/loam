@@ -1,0 +1,312 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import type { Book as EpubBook, Contents, EpubCFI, Location, Rendition } from "epubjs";
+import {
+  getBook,
+  getBookFile,
+  getLocations,
+  loadPrefs,
+  saveLocations,
+  savePrefs,
+  saveProgress,
+  type Book,
+  type Progress,
+  type ReaderPrefs,
+} from "@/lib/library";
+import { INK, flatten, type Entry } from "./config";
+
+/** Events coming from inside the book's iframe. Read through a ref so the latest handlers are used. */
+export type FrameEvents = {
+  key: (e: KeyboardEvent) => void;
+  /** A tap, with its horizontal position as a fraction of the screen width (0 = left edge). */
+  tap: (x: number) => void;
+  activity: () => void;
+};
+
+const SWIPE_PX = 40;
+const TAP_PX = 10;
+const TAP_MS = 350;
+
+function applyPrefs(r: Rendition, p: ReaderPrefs) {
+  r.themes.fontSize(`${p.fontSize}%`);
+  r.themes.override("line-height", String(p.lineHeight), true);
+  r.themes.override("color", INK[p.theme], true);
+}
+
+/**
+ * Loads a book from the shelf into `viewRef`, and owns everything about the reading position:
+ * the saved spot, the current chapter, progress, and text settings.
+ */
+export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | null>, events: RefObject<FrameEvents>) {
+  const bookRef = useRef<EpubBook | null>(null);
+  const rendRef = useRef<Rendition | null>(null);
+  const entriesRef = useRef<Entry[]>([]);
+  const lastProgress = useRef<Progress | null>(null);
+  /** The reading spot. Changes only when the reader moves, never because of re-layout. */
+  const anchorRef = useRef<string | null>(null);
+  const movedRef = useRef(false);
+  const pendingChapter = useRef<number | null>(null);
+  const stickyChapter = useRef<{ idx: number; anchor: string | null } | null>(null);
+
+  const [meta, setMeta] = useState<Book | null>(null);
+  const [status, setStatus] = useState<"loading" | "ready" | "missing" | "error">("loading");
+  const [toc, setToc] = useState<Entry[]>([]);
+  const [chapterIdx, setChapterIdx] = useState(-1);
+  const [pagesLeft, setPagesLeft] = useState<number | null>(null);
+  const [percent, setPercent] = useState<number | null>(null);
+  const [prefs, setPrefs] = useState<ReaderPrefs>(loadPrefs);
+
+  const prefsRef = useRef(prefs);
+  const chapterRef = useRef(chapterIdx);
+  useEffect(() => {
+    prefsRef.current = prefs;
+    chapterRef.current = chapterIdx;
+  }, [prefs, chapterIdx]);
+
+  const flush = useCallback(() => {
+    if (lastProgress.current) void saveProgress(id, lastProgress.current);
+  }, [id]);
+
+  const updatePrefs = useCallback((patch: Partial<ReaderPrefs>) => {
+    const p = { ...prefsRef.current, ...patch };
+    prefsRef.current = p;
+    setPrefs(p);
+    savePrefs(p);
+    const r = rendRef.current;
+    if (!r) return;
+    const cfi = anchorRef.current ?? r.location?.start?.cfi;
+    applyPrefs(r, p);
+    if (cfi && (patch.fontSize || patch.lineHeight)) void r.display(cfi);
+  }, []);
+
+  const next = useCallback(() => {
+    movedRef.current = true;
+    void rendRef.current?.next();
+  }, []);
+  const prev = useCallback(() => {
+    movedRef.current = true;
+    void rendRef.current?.prev();
+  }, []);
+  const jumpTo = useCallback((i: number) => {
+    const target = entriesRef.current[i];
+    if (!target) return;
+    movedRef.current = true;
+    pendingChapter.current = i;
+    void rendRef.current?.display(target.href);
+  }, []);
+  const goChapter = useCallback((dir: 1 | -1) => jumpTo(chapterRef.current + dir), [jumpTo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let locating: Promise<unknown> | null = null;
+
+    (async () => {
+      const [record, file] = await Promise.all([getBook(id), getBookFile(id)]);
+      if (cancelled) return;
+      if (!record || !file) return setStatus("missing");
+      setMeta(record);
+
+      const mod = await import("epubjs");
+      const cfiTool: EpubCFI = new mod.EpubCFI();
+      const book = mod.default(await file.arrayBuffer());
+      bookRef.current = book;
+
+      const rendition = book.renderTo(viewRef.current!, {
+        width: "100%",
+        height: "100%",
+        flow: "paginated",
+        spread: "auto",
+        minSpreadWidth: 1100,
+        allowScriptedContent: false,
+      });
+      rendRef.current = rendition;
+
+      // Once a page's fonts finish loading the text re-flows; put the reader back on their spot.
+      rendition.hooks.content.register(async (contents: Contents) => {
+        await contents.addStylesheet(`${window.location.origin}/fonts/literata.css`);
+        const doc = contents.document;
+        await Promise.all([doc.fonts.load('1em "Literata"'), doc.fonts.load('italic 1em "Literata"')]).catch(() => {});
+        await doc.fonts.ready;
+        const anchor = anchorRef.current;
+        if (cancelled || !anchor || movedRef.current) return;
+        if (new mod.EpubCFI(anchor).spinePos === contents.sectionIndex) void rendition.display(anchor);
+      });
+      rendition.themes.default({
+        body: {
+          "font-family": '"Literata", Georgia, serif !important',
+          background: "transparent !important",
+          "text-rendering": "optimizeLegibility",
+          "-webkit-font-smoothing": "antialiased",
+          "hanging-punctuation": "first",
+          "-webkit-tap-highlight-color": "transparent",
+        },
+        "p, li, blockquote, div, span": {
+          "font-family": "inherit !important",
+          "line-height": "inherit !important",
+          color: "inherit !important",
+        },
+        a: { color: "inherit !important", "text-decoration-color": "rgba(120,100,70,.4) !important" },
+        "::selection": { background: "rgba(122,140,80,.28)" },
+        img: { "max-width": "100% !important", "max-height": "90vh !important", "object-fit": "contain" },
+      });
+      applyPrefs(rendition, prefsRef.current);
+
+      const nav = await book.loaded.navigation;
+      await book.ready;
+      if (cancelled) return;
+      const entries: Entry[] = flatten(nav.toc).flatMap((t) => {
+        const [path, hash] = t.href.split("#");
+        const s = book.spine.get(path);
+        return s ? [{ ...t, spine: s.index, hash: hash || null }] : [];
+      });
+      entriesRef.current = entries;
+      setToc(entries);
+
+      /**
+       * Current chapter = last TOC entry that starts at or before the end of the visible page.
+       * Handles EPUBs where several chapters share one file (entries with #anchors).
+       */
+      const findChapter = (loc: Location): number => {
+        const section = loc.start.index;
+        const contents = (rendition.getContents() as unknown as Contents[]).find((c) => c.sectionIndex === section);
+        let best = -1;
+        for (let i = 0; i < entries.length; i++) {
+          const e = entries[i];
+          if (e.spine < section) best = i;
+          else if (e.spine === section) {
+            if (!e.hash) best = i;
+            else {
+              const el = contents?.document.getElementById(e.hash);
+              if (!el) continue;
+              if (cfiTool.compare(contents!.cfiFromNode(el), loc.end.cfi) <= 0) best = i;
+            }
+          } else break;
+        }
+        return best;
+      };
+
+      rendition.on("relocated", (loc: Location) => {
+        if (movedRef.current || !anchorRef.current) {
+          anchorRef.current = loc.start.cfi;
+          movedRef.current = false;
+        }
+        const cfi = anchorRef.current;
+        if (pendingChapter.current !== null) {
+          stickyChapter.current = { idx: pendingChapter.current, anchor: cfi };
+          pendingChapter.current = null;
+        }
+        const sticky = stickyChapter.current;
+        const pct = book.locations.length() ? book.locations.percentageFromCfi(cfi) : null;
+        const ci = sticky && sticky.anchor === cfi ? sticky.idx : findChapter(loc);
+        const nextEntry = entries[ci + 1];
+        // "pages left" is only meaningful when the next chapter starts in a different file
+        const left =
+          !nextEntry || nextEntry.spine !== loc.end.index || !nextEntry.hash
+            ? Math.max(0, loc.end.displayed.total - loc.end.displayed.page)
+            : null;
+        setChapterIdx(ci);
+        setPercent(pct);
+        setPagesLeft(left);
+        lastProgress.current = { cfi, percent: pct, chapter: entries[ci]?.label ?? null };
+        void saveProgress(id, lastProgress.current);
+      });
+
+      // Input from inside the iframe: keys, mouse activity, swipes and taps.
+      rendition.on("keydown", (e: KeyboardEvent) => events.current.key(e));
+      rendition.on("mousemove", () => events.current.activity());
+      let touch: { x: number; y: number; t: number } | null = null;
+      rendition.on("touchstart", (e: TouchEvent) => {
+        const p = e.changedTouches[0];
+        touch = p ? { x: p.screenX, y: p.screenY, t: Date.now() } : null;
+      });
+      rendition.on("touchend", (e: TouchEvent) => {
+        const p = e.changedTouches[0];
+        if (!touch || !p) return;
+        const dx = p.screenX - touch.x;
+        const dy = p.screenY - touch.y;
+        const quick = Date.now() - touch.t < TAP_MS;
+        touch = null;
+        if (Math.abs(dx) > SWIPE_PX && Math.abs(dx) > Math.abs(dy)) return (dx < 0 ? next : prev)();
+        const selecting = !!e.view?.getSelection()?.toString();
+        if (quick && Math.abs(dx) < TAP_PX && Math.abs(dy) < TAP_PX && !selecting) {
+          events.current.tap(p.screenX / window.screen.width);
+        }
+      });
+
+      anchorRef.current = record.progress?.cfi || null;
+      await rendition.display(anchorRef.current || undefined);
+      if (cancelled) return;
+      setStatus("ready");
+
+      // Percentages need a location index; cache it so it's computed once per book.
+      const cached = await getLocations(id);
+      if (cached) book.locations.load(cached);
+      else {
+        locating = book.locations.generate(1600);
+        await locating;
+        if (cancelled) return;
+        void saveLocations(id, book.locations.save());
+      }
+      if (cancelled) return;
+      const cur = anchorRef.current;
+      if (cur) {
+        const pct = book.locations.percentageFromCfi(cur);
+        setPercent(pct);
+        if (lastProgress.current) {
+          lastProgress.current = { ...lastProgress.current, percent: pct };
+          void saveProgress(id, lastProgress.current);
+        }
+      }
+    })().catch((err) => {
+      console.error("[reader]", err);
+      if (!cancelled) setStatus("error");
+    });
+
+    return () => {
+      cancelled = true;
+      flush();
+      const book = bookRef.current;
+      const rendition = rendRef.current;
+      // epub.js keeps working after open (rendering start, location scan); tear down once it settles.
+      void Promise.allSettled([book?.opened, locating]).then(() =>
+        setTimeout(() => {
+          rendition?.destroy();
+          book?.destroy();
+        }, 0),
+      );
+      rendRef.current = null;
+      bookRef.current = null;
+      anchorRef.current = null;
+    };
+  }, [id, viewRef, events, next, prev, flush]);
+
+  // Save the spot when the tab is hidden or closed (mobile browsers often skip unload).
+  useEffect(() => {
+    const hidden = () => document.visibilityState === "hidden" && flush();
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [flush]);
+
+  return {
+    meta,
+    status,
+    toc,
+    chapterIdx,
+    pagesLeft,
+    percent,
+    prefs,
+    updatePrefs,
+    next,
+    prev,
+    jumpTo,
+    goChapter,
+    flush,
+  };
+}
+
+export type EpubReader = ReturnType<typeof useEpubReader>;
