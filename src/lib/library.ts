@@ -22,9 +22,10 @@ export type ReaderPrefs = {
   fontSize: number; // percent
   lineHeight: number;
   theme: "light" | "dark";
+  showProgress: boolean;
 };
 
-export const DEFAULT_PREFS: ReaderPrefs = { fontSize: 105, lineHeight: 1.65, theme: "light" };
+export const DEFAULT_PREFS: ReaderPrefs = { fontSize: 105, lineHeight: 1.65, theme: "light", showProgress: true };
 
 interface LoamDB extends DBSchema {
   books: { key: string; value: Book; indexes: { openedAt: number } };
@@ -98,11 +99,12 @@ export async function removeBook(id: string) {
   ]);
 }
 
+/** Single read-write transaction, so rapid page turns are applied in order. */
 export async function saveProgress(id: string, progress: Progress) {
-  const d = await db();
-  const book = await d.get("books", id);
-  if (!book) return;
-  await d.put("books", { ...book, progress, openedAt: Date.now() });
+  const tx = (await db()).transaction("books", "readwrite");
+  const book = await tx.store.get(id);
+  if (book) await tx.store.put({ ...book, progress, openedAt: Date.now() });
+  await tx.done;
 }
 
 export async function getLocations(id: string) {
@@ -139,6 +141,8 @@ async function readEpubMeta(file: File) {
     }
     return { title: metadata.title?.trim() ?? "", author: metadata.creator?.trim() ?? "", cover };
   } finally {
+    // epub.js keeps loading (navigation, display options) after metadata; let it settle first.
+    await book.ready.catch(() => {});
     book.destroy();
   }
 }

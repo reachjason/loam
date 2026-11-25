@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { ArrowLeft, ChevronLeft, ChevronRight, List, Minus, Moon, Plus, Sun, X } from "lucide-react";
-import type { Book as EpubBook, Contents, Location, NavItem, Rendition } from "epubjs";
+import { useParams, useRouter } from "next/navigation";
+import { ArrowLeft, ChevronLeft, ChevronRight, Keyboard, List, Minus, Moon, Plus, Sun, X } from "lucide-react";
+import type { Book as EpubBook, Contents, EpubCFI, Location, NavItem, Rendition } from "epubjs";
 import { Button } from "@/components/ui/button";
 import {
   getBook,
@@ -15,6 +15,7 @@ import {
   savePrefs,
   saveProgress,
   type Book,
+  type Progress,
   type ReaderPrefs,
 } from "@/lib/library";
 import { cn } from "@/lib/utils";
@@ -24,11 +25,22 @@ const FONT_STEPS = [85, 95, 105, 115, 125, 140, 160];
 const LINE_STEPS = [1.4, 1.55, 1.65, 1.8, 2];
 const IDLE_MS = 2200;
 
-type Flat = { label: string; href: string; depth: number };
-function flatten(items: NavItem[], depth = 0): Flat[] {
+const SHORTCUTS: [string, string][] = [
+  ["← →  or  Space ⇧Space", "Previous / next page"],
+  ["[  ]", "Previous / next chapter"],
+  ["C", "Contents"],
+  ["P", "Show / hide progress"],
+  ["−  =", "Smaller / larger text"],
+  ["N", "Parchment / night"],
+  ["Esc", "Close panel"],
+  ["?", "Shortcuts"],
+];
+
+type Entry = { label: string; href: string; depth: number; spine: number; hash: string | null };
+
+function flatten(items: NavItem[], depth = 0): { label: string; href: string; depth: number }[] {
   return items.flatMap((i) => [{ label: i.label.trim(), href: i.href, depth }, ...flatten(i.subitems ?? [], depth + 1)]);
 }
-const stripHash = (h: string) => h.split("#")[0];
 
 function step<T>(arr: readonly T[], cur: T, dir: 1 | -1): T {
   const i = arr.indexOf(cur);
@@ -38,28 +50,37 @@ function step<T>(arr: readonly T[], cur: T, dir: 1 | -1): T {
 
 export function Reader() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const viewRef = useRef<HTMLDivElement>(null);
   const bookRef = useRef<EpubBook | null>(null);
   const rendRef = useRef<Rendition | null>(null);
-  const spineLabels = useRef<Map<number, string>>(new Map());
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const entriesRef = useRef<Entry[]>([]);
+  const lastProgress = useRef<Progress | null>(null);
+  /** The reading spot. Changes only when the reader moves, never because of re-layout. */
+  const anchorRef = useRef<string | null>(null);
+  const movedRef = useRef(false);
+  const pendingChapter = useRef<number | null>(null);
+  const stickyChapter = useRef<{ idx: number; anchor: string | null } | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const [meta, setMeta] = useState<Book | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "missing" | "error">("loading");
-  const [toc, setToc] = useState<Flat[]>([]);
-  const [chapter, setChapter] = useState<string | null>(null);
+  const [toc, setToc] = useState<Entry[]>([]);
+  const [chapterIdx, setChapterIdx] = useState(-1);
+  const [pagesLeft, setPagesLeft] = useState<number | null>(null);
   const [percent, setPercent] = useState<number | null>(null);
   const [prefs, setPrefs] = useState<ReaderPrefs>(loadPrefs);
-  const [panel, setPanel] = useState<"toc" | "type" | null>(null);
+  const [panel, setPanel] = useState<"toc" | "type" | "keys" | null>(null);
   const [chrome, setChrome] = useState(true);
 
   const prefsRef = useRef(prefs);
   const panelRef = useRef(panel);
+  const chapterRef = useRef(chapterIdx);
   useEffect(() => {
     prefsRef.current = prefs;
     panelRef.current = panel;
-  }, [prefs, panel]);
+    chapterRef.current = chapterIdx;
+  }, [prefs, panel, chapterIdx]);
 
   // ---- chrome visibility -------------------------------------------------
   const poke = useCallback(() => {
@@ -70,37 +91,93 @@ export function Reader() {
     }, IDLE_MS);
   }, []);
 
-  // ---- navigation --------------------------------------------------------
-  const next = useCallback(() => void rendRef.current?.next(), []);
-  const prev = useCallback(() => void rendRef.current?.prev(), []);
+  // ---- saving ------------------------------------------------------------
+  const flush = useCallback(() => {
+    if (lastProgress.current) void saveProgress(id, lastProgress.current);
+  }, [id]);
 
-  const onKey = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "ArrowRight" || e.key === "PageDown" || (e.key === " " && !e.shiftKey)) {
-        e.preventDefault();
-        next();
-      } else if (e.key === "ArrowLeft" || e.key === "PageUp" || (e.key === " " && e.shiftKey)) {
-        e.preventDefault();
-        prev();
-      } else if (e.key === "Escape") {
-        setPanel(null);
-      }
-    },
-    [next, prev],
-  );
-
-  // ---- apply typography + theme into the iframe --------------------------
+  // ---- typography + theme inside the iframe ------------------------------
   const applyPrefs = useCallback((r: Rendition, p: ReaderPrefs) => {
     r.themes.fontSize(`${p.fontSize}%`);
     r.themes.override("line-height", String(p.lineHeight), true);
     r.themes.override("color", INK[p.theme], true);
   }, []);
 
+  const updatePrefs = useCallback(
+    (patch: Partial<ReaderPrefs>) => {
+      const p = { ...prefsRef.current, ...patch };
+      prefsRef.current = p;
+      setPrefs(p);
+      savePrefs(p);
+      const r = rendRef.current;
+      if (!r) return;
+      const cfi = anchorRef.current ?? r.location?.start?.cfi;
+      applyPrefs(r, p);
+      if (cfi && (patch.fontSize || patch.lineHeight)) void r.display(cfi);
+    },
+    [applyPrefs],
+  );
+
+  // ---- navigation --------------------------------------------------------
+  const next = useCallback(() => {
+    movedRef.current = true;
+    void rendRef.current?.next();
+  }, []);
+  const prev = useCallback(() => {
+    movedRef.current = true;
+    void rendRef.current?.prev();
+  }, []);
+  const jumpTo = useCallback((i: number) => {
+    const target = entriesRef.current[i];
+    if (!target) return;
+    movedRef.current = true;
+    pendingChapter.current = i;
+    void rendRef.current?.display(target.href);
+  }, []);
+  const goChapter = useCallback((dir: 1 | -1) => jumpTo(chapterRef.current + dir), [jumpTo]);
+
+  const togglePanel = useCallback((p: "toc" | "type" | "keys") => setPanel((cur) => (cur === p ? null : p)), []);
+
+  const onKey = useCallback(
+    (e: KeyboardEvent, fromBook = false) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Escape") return setPanel(null);
+      const p = prefsRef.current;
+      const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const actions: Record<string, () => void> = {
+        ArrowRight: next,
+        PageDown: next,
+        ArrowLeft: prev,
+        PageUp: prev,
+        " ": e.shiftKey ? prev : next,
+        "]": () => goChapter(1),
+        "[": () => goChapter(-1),
+        c: () => togglePanel("toc"),
+        p: () => updatePrefs({ showProgress: !p.showProgress }),
+        "=": () => updatePrefs({ fontSize: step(FONT_STEPS, p.fontSize, 1) }),
+        "+": () => updatePrefs({ fontSize: step(FONT_STEPS, p.fontSize, 1) }),
+        "-": () => updatePrefs({ fontSize: step(FONT_STEPS, p.fontSize, -1) }),
+        n: () => updatePrefs({ theme: p.theme === "light" ? "dark" : "light" }),
+        "?": () => togglePanel("keys"),
+      };
+      const action = actions[k];
+      if (!action) return;
+      if (!fromBook) e.preventDefault(); // listeners inside the book frame are passive
+      action();
+    },
+    [next, prev, goChapter, togglePanel, updatePrefs],
+  );
+
+  // Latest key handler, readable from the iframe listener registered once at load.
+  const onKeyRef = useRef(onKey);
+  useEffect(() => {
+    onKeyRef.current = onKey;
+  }, [onKey]);
+
   // ---- load book ---------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    let cleanupKeys: (() => void) | undefined;
+    let locating: Promise<unknown> | null = null;
 
     (async () => {
       const [record, file] = await Promise.all([getBook(id), getBookFile(id)]);
@@ -108,7 +185,9 @@ export function Reader() {
       if (!record || !file) return setStatus("missing");
       setMeta(record);
 
-      const { default: ePub } = await import("epubjs");
+      const mod = await import("epubjs");
+      const ePub = mod.default;
+      const cfiTool: EpubCFI = new mod.EpubCFI();
       const book = ePub(await file.arrayBuffer());
       bookRef.current = book;
 
@@ -122,8 +201,15 @@ export function Reader() {
       });
       rendRef.current = rendition;
 
-      rendition.hooks.content.register((contents: Contents) => {
-        contents.addStylesheet(`${window.location.origin}/fonts/literata.css`);
+      // Once a page's fonts finish loading the text re-flows; put the reader back on their spot.
+      rendition.hooks.content.register(async (contents: Contents) => {
+        await contents.addStylesheet(`${window.location.origin}/fonts/literata.css`);
+        const doc = contents.document;
+        await Promise.all([doc.fonts.load('1em "Literata"'), doc.fonts.load('italic 1em "Literata"')]).catch(() => {});
+        await doc.fonts.ready;
+        const anchor = anchorRef.current;
+        if (cancelled || !anchor || movedRef.current) return;
+        if (new mod.EpubCFI(anchor).spinePos === contents.sectionIndex) void rendition.display(anchor);
       });
       rendition.themes.default({
         body: {
@@ -145,37 +231,68 @@ export function Reader() {
       applyPrefs(rendition, prefsRef.current);
 
       const nav = await book.loaded.navigation;
-      if (cancelled) return;
-      const flat = flatten(nav.toc);
-      setToc(flat);
       await book.ready;
-      for (const item of flat) {
-        const s = book.spine.get(stripHash(item.href));
-        if (s && !spineLabels.current.has(s.index)) spineLabels.current.set(s.index, item.label);
-      }
+      if (cancelled) return;
+      const entries: Entry[] = flatten(nav.toc).flatMap((t) => {
+        const [path, hash] = t.href.split("#");
+        const s = book.spine.get(path);
+        return s ? [{ ...t, spine: s.index, hash: hash || null }] : [];
+      });
+      entriesRef.current = entries;
+      setToc(entries);
 
-      const labelFor = (href: string) => {
-        const s = book.spine.get(stripHash(href));
-        if (!s) return null;
-        for (let i = s.index; i >= 0; i--) {
-          const l = spineLabels.current.get(i);
-          if (l) return l;
+      /**
+       * Current chapter = last TOC entry that starts at or before the end of the visible page.
+       * Handles EPUBs where several chapters share one file (entries with #anchors).
+       */
+      const findChapter = (loc: Location): number => {
+        const section = loc.start.index;
+        const contents = (rendition.getContents() as unknown as Contents[]).find((c) => c.sectionIndex === section);
+        let best = -1;
+        for (let i = 0; i < entries.length; i++) {
+          const e = entries[i];
+          if (e.spine < section) best = i;
+          else if (e.spine === section) {
+            if (!e.hash) best = i;
+            else {
+              const el = contents?.document.getElementById(e.hash);
+              if (!el) continue;
+              const anchor = contents!.cfiFromNode(el);
+              if (cfiTool.compare(anchor, loc.end.cfi) <= 0) best = i;
+            }
+          } else break;
         }
-        return null;
+        return best;
       };
 
       rendition.on("relocated", (loc: Location) => {
-        const cfi = loc.start.cfi;
+        if (movedRef.current || !anchorRef.current) {
+          anchorRef.current = loc.start.cfi;
+          movedRef.current = false;
+        }
+        const cfi = anchorRef.current;
+        if (pendingChapter.current !== null) {
+          stickyChapter.current = { idx: pendingChapter.current, anchor: cfi };
+          pendingChapter.current = null;
+        }
+        const sticky = stickyChapter.current;
         const pct = book.locations.length() ? book.locations.percentageFromCfi(cfi) : null;
-        const ch = labelFor(loc.start.href);
-        setChapter(ch);
+        const ci = sticky && sticky.anchor === cfi ? sticky.idx : findChapter(loc);
+        const nextEntry = entries[ci + 1];
+        // "pages left" is only meaningful when the next chapter starts in a different file
+        const left =
+          !nextEntry || nextEntry.spine !== loc.end.index || !nextEntry.hash
+            ? Math.max(0, loc.end.displayed.total - loc.end.displayed.page)
+            : null;
+        setChapterIdx(ci);
         setPercent(pct);
-        clearTimeout(saveTimer.current);
-        saveTimer.current = setTimeout(() => void saveProgress(id, { cfi, percent: pct, chapter: ch }), 400);
+        setPagesLeft(left);
+        lastProgress.current = { cfi, percent: pct, chapter: entries[ci]?.label ?? null };
+        void saveProgress(id, lastProgress.current);
       });
 
       // events from inside the iframe
-      rendition.on("keydown", onKey);
+      rendition.on("keydown", (e: KeyboardEvent) => onKeyRef.current(e, true));
       rendition.on("mousemove", poke);
       let touchX: number | null = null;
       rendition.on("touchstart", (e: TouchEvent) => (touchX = e.changedTouches[0]?.screenX ?? null));
@@ -186,10 +303,8 @@ export function Reader() {
         if (Math.abs(dx) > 40) (dx < 0 ? next : prev)();
       });
 
-      window.addEventListener("keydown", onKey);
-      cleanupKeys = () => window.removeEventListener("keydown", onKey);
-
-      await rendition.display(record.progress?.cfi || undefined);
+      anchorRef.current = record.progress?.cfi || null;
+      await rendition.display(anchorRef.current || undefined);
       if (cancelled) return;
       setStatus("ready");
       poke();
@@ -198,12 +313,21 @@ export function Reader() {
       const cached = await getLocations(id);
       if (cached) book.locations.load(cached);
       else {
-        await book.locations.generate(1600);
+        locating = book.locations.generate(1600);
+        await locating;
+        if (cancelled) return;
         void saveLocations(id, book.locations.save());
       }
       if (cancelled) return;
-      const cur = rendition.location?.start?.cfi;
-      if (cur) setPercent(book.locations.percentageFromCfi(cur));
+      const cur = anchorRef.current;
+      if (cur) {
+        const pct = book.locations.percentageFromCfi(cur);
+        setPercent(pct);
+        if (lastProgress.current) {
+          lastProgress.current = { ...lastProgress.current, percent: pct };
+          void saveProgress(id, lastProgress.current);
+        }
+      }
     })().catch((err) => {
       console.error("[reader]", err);
       if (!cancelled) setStatus("error");
@@ -211,37 +335,42 @@ export function Reader() {
 
     return () => {
       cancelled = true;
-      cleanupKeys?.();
-      clearTimeout(saveTimer.current);
+      flush();
       clearTimeout(idleTimer.current);
-      rendRef.current?.destroy();
-      bookRef.current?.destroy();
+      const book = bookRef.current;
+      const rendition = rendRef.current;
+      // epub.js keeps working after open (rendering start, location scan); tear down once it settles.
+      void Promise.allSettled([book?.opened, locating]).then(() =>
+        setTimeout(() => {
+          rendition?.destroy();
+          book?.destroy();
+        }, 0),
+      );
       rendRef.current = null;
       bookRef.current = null;
+      anchorRef.current = null;
     };
-  }, [id, applyPrefs, onKey, poke, next, prev]);
-
-  // ---- prefs changes -----------------------------------------------------
-  const updatePrefs = useCallback(
-    (patch: Partial<ReaderPrefs>) => {
-      const p = { ...prefsRef.current, ...patch };
-      setPrefs(p);
-      savePrefs(p);
-      const r = rendRef.current;
-      if (!r) return;
-      const cfi = r.location?.start?.cfi;
-      applyPrefs(r, p);
-      if (cfi && (patch.fontSize || patch.lineHeight)) void r.display(cfi);
-    },
-    [applyPrefs],
-  );
+  }, [id, applyPrefs, poke, next, prev, flush]);
 
   useEffect(() => {
+    const key = (e: KeyboardEvent) => onKeyRef.current(e);
+    const hidden = () => document.visibilityState === "hidden" && flush();
+    window.addEventListener("keydown", key);
     window.addEventListener("mousemove", poke);
-    return () => window.removeEventListener("mousemove", poke);
-  }, [poke]);
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("mousemove", poke);
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [poke, flush]);
 
   const showChrome = chrome || panel !== null || status !== "ready";
+  const chapter = toc[chapterIdx]?.label ?? null;
+  const leftLabel =
+    pagesLeft === null ? null : pagesLeft === 0 ? "Last page in chapter" : `${pagesLeft} ${pagesLeft === 1 ? "page" : "pages"} left in chapter`;
 
   return (
     <div
@@ -255,7 +384,15 @@ export function Reader() {
           showChrome ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
-        <Button variant="ghost" size="sm" className="text-muted-foreground" nativeButton={false} render={<Link href="/" />}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground"
+          onClick={() => {
+            flush();
+            router.push("/");
+          }}
+        >
           <ArrowLeft /> Shelf
         </Button>
         <p className="hidden max-w-[50%] truncate font-serif text-sm text-muted-foreground italic sm:block">{meta?.title}</p>
@@ -263,9 +400,18 @@ export function Reader() {
           <Button
             variant="ghost"
             size="icon"
+            aria-label="Keyboard shortcuts"
+            className={cn("text-muted-foreground", panel === "keys" && "bg-muted text-foreground")}
+            onClick={() => togglePanel("keys")}
+          >
+            <Keyboard />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label="Contents"
             className={cn("text-muted-foreground", panel === "toc" && "bg-muted text-foreground")}
-            onClick={() => setPanel((p) => (p === "toc" ? null : "toc"))}
+            onClick={() => togglePanel("toc")}
           >
             <List />
           </Button>
@@ -274,7 +420,7 @@ export function Reader() {
             size="icon"
             aria-label="Text settings"
             className={cn("font-serif text-base text-muted-foreground", panel === "type" && "bg-muted text-foreground")}
-            onClick={() => setPanel((p) => (p === "type" ? null : "type"))}
+            onClick={() => togglePanel("type")}
           >
             Aa
           </Button>
@@ -318,20 +464,23 @@ export function Reader() {
       </div>
 
       {/* progress */}
-      <footer
-        className={cn(
-          "absolute inset-x-0 bottom-0 z-20 px-[max(1.5rem,6vw)] pb-4 transition-opacity duration-500",
-          status === "ready" ? "opacity-100" : "opacity-0",
-        )}
-      >
-        <div className={cn("mb-2 flex justify-between text-[11px] text-muted-foreground transition-opacity duration-500", showChrome ? "opacity-100" : "opacity-0")}>
-          <span className="truncate pr-4">{chapter}</span>
-          <span className="font-mono tabular-nums">{percent != null ? `${Math.round(percent * 100)}%` : ""}</span>
-        </div>
-        <div className="h-px bg-border">
-          <div className="h-px bg-primary/70 transition-[width] duration-300" style={{ width: `${(percent ?? 0) * 100}%` }} />
-        </div>
-      </footer>
+      {prefs.showProgress && status === "ready" && (
+        <footer className="absolute inset-x-0 bottom-0 z-20 px-[max(1.5rem,6vw)] pb-4" aria-label="Reading progress">
+          <div className="mb-2 flex items-baseline justify-between gap-4 text-[11px] text-muted-foreground">
+            <span className="truncate font-serif text-xs italic" data-testid="chapter">
+              {chapter}
+            </span>
+            <span className="shrink-0 tabular-nums">
+              {leftLabel}
+              {leftLabel && percent != null && <span className="mx-2 opacity-50">·</span>}
+              {percent != null && <span className="font-mono">{Math.round(percent * 100)}%</span>}
+            </span>
+          </div>
+          <div className="h-px bg-border">
+            <div className="h-px bg-primary/70 transition-[width] duration-300" style={{ width: `${(percent ?? 0) * 100}%` }} />
+          </div>
+        </footer>
+      )}
 
       {/* contents panel */}
       {panel === "toc" && (
@@ -349,17 +498,20 @@ export function Reader() {
                 <button
                   key={`${t.href}-${i}`}
                   type="button"
+                  aria-current={i === chapterIdx ? "true" : undefined}
+                  ref={i === chapterIdx ? (el) => el?.scrollIntoView({ block: "center" }) : undefined}
                   onClick={() => {
-                    void rendRef.current?.display(t.href);
+                    jumpTo(i);
                     setPanel(null);
                   }}
                   style={{ paddingLeft: `${0.75 + t.depth * 1}rem` }}
                   className={cn(
-                    "block w-full rounded-lg py-2 pr-3 text-left text-sm transition-colors hover:bg-muted",
-                    t.label === chapter ? "font-medium text-primary" : "text-foreground/80",
+                    "flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm transition-colors hover:bg-muted",
+                    i === chapterIdx ? "bg-secondary font-medium text-primary" : "text-foreground/80",
                   )}
                 >
-                  {t.label}
+                  <span className="flex-1">{t.label}</span>
+                  {i === chapterIdx && <span className="text-[10px] font-normal tracking-wide text-muted-foreground uppercase">Reading</span>}
                 </button>
               ))}
             </nav>
@@ -409,8 +561,47 @@ export function Reader() {
                 ))}
               </div>
             </Row>
+            <Row label="Progress">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={prefs.showProgress}
+                aria-label="Show progress"
+                onClick={() => updatePrefs({ showProgress: !prefs.showProgress })}
+                className={cn(
+                  "relative h-5 w-9 rounded-full transition-colors",
+                  prefs.showProgress ? "bg-primary" : "bg-muted-foreground/30",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 left-0.5 size-4 rounded-full bg-card shadow transition-transform",
+                    prefs.showProgress && "translate-x-4",
+                  )}
+                />
+              </button>
+            </Row>
           </div>
         </>
+      )}
+
+      {/* shortcuts */}
+      {panel === "keys" && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-foreground/10" onClick={() => setPanel(null)}>
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-4 font-serif text-lg">Shortcuts</h2>
+            <dl className="space-y-2.5 text-sm">
+              {SHORTCUTS.map(([k, d]) => (
+                <div key={k} className="flex items-center justify-between gap-6">
+                  <dt className="text-muted-foreground">{d}</dt>
+                  <dd>
+                    <kbd className="rounded-md border border-border bg-secondary px-2 py-0.5 font-mono text-xs whitespace-pre">{k}</kbd>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
       )}
     </div>
   );

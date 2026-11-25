@@ -177,6 +177,9 @@ export function Shelf() {
                           {b.progress ? (pct != null ? `${Math.round(pct * 100)}%` : "Started") : "New"}
                         </span>
                       </div>
+                      {b.progress?.chapter && (
+                        <p className="mt-1 truncate font-serif text-xs text-muted-foreground italic">{b.progress.chapter}</p>
+                      )}
                     </div>
                   </Link>
                   <div className="absolute top-1/2 right-3 -translate-y-1/2">
