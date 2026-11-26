@@ -23,6 +23,7 @@ const loadLinks = (id: string): Link[] => {
   }
 };
 const FOLLOW_KEY = "loam:follow-audio";
+const LEAD_IN_S = 60;
 
 function norm(s: string) {
   return s
@@ -122,12 +123,12 @@ export function useSync(bookId: string, reader: EpubReader, audio: Audiobook) {
     if (cfi) goTo(cfi);
   }, [points, time, cfiAt, goTo]);
 
-  /** Start the audio at the top of the page on screen. */
+  /** Start a little before the top of the page on screen, so the narrator catches up rather than skips ahead. */
   const listenFromPage = useCallback(() => {
     const range = pageRange();
     const f = range && fractionOf(range.start);
     if (!points || f == null) return;
-    seek(interp(points.list, f, "f", "t"));
+    seek(Math.max(0, interp(points.list, f, "f", "t") - LEAD_IN_S));
   }, [points, pageRange, fractionOf, seek]);
 
   /** "The narrator is at the top of this page right now." */

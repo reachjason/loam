@@ -28,6 +28,17 @@ const SWIPE_PX = 40;
 const TAP_PX = 10;
 const TAP_MS = 350;
 
+/**
+ * epub.js positions highlights once and only redraws them when the page frame resizes, so they
+ * drift when text re-flows inside it (fonts loading, text settings). Redraw after layout settles.
+ */
+function redrawMarks(r: Rendition) {
+  requestAnimationFrame(() => {
+    const views = r.views() as unknown as { all?: () => { pane?: { render: () => void } }[] };
+    for (const v of views.all?.() ?? []) v.pane?.render();
+  });
+}
+
 function applyPrefs(r: Rendition, p: ReaderPrefs) {
   r.themes.fontSize(`${p.fontSize}%`);
   r.themes.override("line-height", String(p.lineHeight), true);
@@ -80,7 +91,8 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     if (!r) return;
     const cfi = anchorRef.current ?? r.location?.start?.cfi;
     applyPrefs(r, p);
-    if (cfi && (patch.fontSize || patch.lineHeight)) void r.display(cfi);
+    if (cfi && (patch.fontSize || patch.lineHeight)) void r.display(cfi).then(() => redrawMarks(r));
+    else redrawMarks(r);
   }, []);
 
   const next = useCallback(() => {
@@ -211,7 +223,10 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
         await contents.addStylesheet(`${window.location.origin}/fonts/literata.css`);
         const doc = contents.document;
         await Promise.all([doc.fonts.load('1em "Literata"'), doc.fonts.load('italic 1em "Literata"')]).catch(() => {});
+        // Images load after the text and push it around; redraw highlights once each settles.
+        for (const img of doc.images) if (!img.complete) img.addEventListener("load", () => redrawMarks(rendition), { once: true });
         await doc.fonts.ready;
+        redrawMarks(rendition);
         const anchor = anchorRef.current;
         if (cancelled || !anchor || movedRef.current) return;
         if (new mod.EpubCFI(anchor).spinePos === contents.sectionIndex) void rendition.display(anchor);
@@ -271,6 +286,7 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
       };
 
       rendition.on("relocated", (loc: Location) => {
+        redrawMarks(rendition);
         if (movedRef.current || !anchorRef.current) {
           anchorRef.current = loc.start.cfi;
           movedRef.current = false;
