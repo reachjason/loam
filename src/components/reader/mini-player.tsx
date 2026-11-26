@@ -2,7 +2,7 @@
 
 import { Headphones, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatTime } from "./listen-panel";
+import { formatTime } from "@/lib/audio";
 import type { Audiobook } from "./use-audiobook";
 
 /**

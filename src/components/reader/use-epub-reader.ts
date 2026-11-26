@@ -121,6 +121,14 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     void rendRef.current?.display(cfi);
   }, []);
 
+  /** Return to an exact earlier reading spot (kept as-is, not re-derived from the new layout). */
+  const restore = useCallback((cfi: string) => {
+    anchorRef.current = cfi;
+    movedRef.current = false;
+    stickyChapter.current = null;
+    void rendRef.current?.display(cfi);
+  }, []);
+
   /** Where a note written now belongs: the selected passage if there is one, otherwise the current page. */
   const capture = useCallback((): { cfi: string; quote: string | null; chapter: string | null } | null => {
     const r = rendRef.current;
@@ -143,20 +151,6 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     // Colors live in globals.css so they follow the reader's theme.
     rendRef.current?.annotations.highlight(cfi, {}, onClick, className, {});
   }, []);
-  /** Every section of the book, loaded (for searching). */
-  const loadSections = useCallback(async () => {
-    const b = bookRef.current;
-    if (!b) return [];
-    const items: { index: number; load: (r: unknown) => Promise<unknown>; cfiFromRange: (r: Range) => string; linear?: boolean | string }[] = [];
-    b.spine.each((s: (typeof items)[number]) => items.push(s));
-    return Promise.all(
-      items.map(async (s) => ({
-        index: s.index,
-        doc: ((await s.load(b.load.bind(b)).catch(() => null)) as Element | null)?.ownerDocument ?? null,
-        cfiFromRange: (r: Range) => s.cfiFromRange(r),
-      })),
-    );
-  }, []);
   const unhighlight = useCallback((cfi: string) => rendRef.current?.annotations.remove(cfi, "highlight"), []);
   /** Position as a fraction of the whole text (0..1), or null until locations are ready. */
   const fractionOf = useCallback((cfi: string) => {
@@ -172,26 +166,59 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     const loc = rendRef.current?.location;
     return loc ? { start: anchorRef.current ?? loc.start.cfi, end: loc.end.cfi } : null;
   }, []);
-  /** Where each contents entry starts, as a CFI (loads sections whose entries point at #anchors). */
+  /** Every section of the book in reading order, without loading any of them. */
+  const sectionList = useCallback(() => {
+    const out: { index: number; cfiBase: string }[] = [];
+    bookRef.current?.spine.each((sec: { index: number; cfiBase: string }) => out.push({ index: sec.index, cfiBase: sec.cfiBase }));
+    return out;
+  }, []);
+
+  /**
+   * Load one section, use it, and let it go again, so only what's needed right now stays in memory
+   * (epub.js otherwise keeps every loaded section's document around).
+   */
+  const readSection = useCallback(
+    async <T,>(index: number, fn: (doc: Document, toCfi: (r: Range) => string, el: (e: Element) => string) => T): Promise<T | null> => {
+      const b = bookRef.current;
+      const sec = b?.spine.get(index);
+      if (!b || !sec) return null;
+      try {
+        const root = (await sec.load(b.load.bind(b))) as unknown as Element; // resolves to the root element
+        return fn(
+          root.ownerDocument,
+          (r) => sec.cfiFromRange(r),
+          (e) => sec.cfiFromElement(e),
+        );
+      } catch {
+        return null;
+      } finally {
+        sec.unload();
+      }
+    },
+    [],
+  );
+
+  /** Where each contents entry starts, as a CFI. Only sections with #anchor entries are read, one at a time. */
   const entryStarts = useCallback(async (): Promise<(string | null)[]> => {
     const b = bookRef.current;
     if (!b) return [];
-    return Promise.all(
-      entriesRef.current.map(async (e) => {
-        const section = b.spine.get(e.spine);
-        if (!section) return null;
-        if (!e.hash) return `epubcfi(${section.cfiBase}!/4)`;
-        try {
-          // load() resolves to the section's root element
-          const root = (await section.load(b.load.bind(b))) as unknown as Element;
-          const el = root.ownerDocument.getElementById(e.hash);
-          return el ? section.cfiFromElement(el) : `epubcfi(${section.cfiBase}!/4)`;
-        } catch {
-          return `epubcfi(${section.cfiBase}!/4)`;
+    const entries = entriesRef.current;
+    const out: (string | null)[] = entries.map((e) => {
+      const sec = b.spine.get(e.spine);
+      return sec ? `epubcfi(${sec.cfiBase}!/4)` : null;
+    });
+    const bySpine = new Map<number, number[]>();
+    entries.forEach((e, i) => e.hash && bySpine.set(e.spine, [...(bySpine.get(e.spine) ?? []), i]));
+    for (const [spine, idxs] of bySpine) {
+      await readSection(spine, (doc, _r, fromEl) => {
+        for (const i of idxs) {
+          const el = doc.getElementById(entries[i].hash!);
+          if (el) out[i] = fromEl(el);
         }
-      }),
-    );
-  }, []);
+      });
+    }
+    return out;
+  }, [readSection]);
 
   /** The selection in the book right now (epub.js reports selections only after a short delay). */
   const currentSelection = useCallback((): BookSelection | null => {
@@ -450,13 +477,15 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     jumpTo,
     goChapter,
     goTo,
+    restore,
     capture,
     located,
     fractionOf,
     cfiAt,
     pageRange,
     entryStarts,
-    loadSections,
+    sectionList,
+    readSection,
     clearSelection,
     currentSelection,
     highlight,

@@ -22,7 +22,7 @@ export const SHORTCUTS: [string, string][] = [
   ["P", "Show / hide progress"],
   ["−  =", "Smaller / larger text"],
   ["N", "Parchment / night"],
-  ["Esc", "Close panel"],
+  ["Esc", "Close panel · back to where you were after search"],
   ["?", "Shortcuts"],
 ];
 

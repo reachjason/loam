@@ -1,27 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, CornerUpLeft, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { IDLE_MS, type Panel } from "./config";
-import { ContentsPanel } from "./contents-panel";
-import { NoteCard } from "./note-card";
-import { NotesPanel, type Draft } from "./notes-panel";
+import type { Draft } from "./notes-panel";
 import { ProgressFooter } from "./progress-footer";
-import { SettingsPanel } from "./settings-panel";
-import { ShortcutsDialog } from "./shortcuts-dialog";
 import { TopBar } from "./top-bar";
 import { useEpubReader, type BookSelection, type FrameEvents } from "./use-epub-reader";
-import { ListenPanel } from "./listen-panel";
-import { SearchPanel } from "./search-panel";
 import { useBookSearch } from "./use-book-search";
 import { MiniPlayer } from "./mini-player";
 import { useAudiobook } from "./use-audiobook";
 import { useNotes } from "./use-notes";
 import { useSync } from "./use-sync";
 import { useReaderKeys } from "./use-reader-keys";
+
+// Panels load the first time they're opened, not with the reader.
+const ContentsPanel = dynamic(() => import("./contents-panel").then((m) => m.ContentsPanel));
+const NoteCard = dynamic(() => import("./note-card").then((m) => m.NoteCard));
+const NotesPanel = dynamic(() => import("./notes-panel").then((m) => m.NotesPanel));
+const SettingsPanel = dynamic(() => import("./settings-panel").then((m) => m.SettingsPanel));
+const ShortcutsDialog = dynamic(() => import("./shortcuts-dialog").then((m) => m.ShortcutsDialog));
+const ListenPanel = dynamic(() => import("./listen-panel").then((m) => m.ListenPanel));
+const SearchPanel = dynamic(() => import("./search-panel").then((m) => m.SearchPanel));
 
 export function Reader() {
   const { id } = useParams<{ id: string }>();
@@ -139,7 +143,40 @@ export function Reader() {
     setCardOpen(false);
   }, [reader]);
   const openPanel = useCallback((p: Panel) => setPanel(p), []);
-  const frameKey = useReaderKeys(reader, keyToggle, closePanel, audio, openPanel);
+  // ---- search: remember where you were reading, so Esc can bring you back ----
+  const [returnTo, setReturnTo] = useState<string | null>(null);
+  const returnRef = useRef(returnTo);
+  useEffect(() => {
+    returnRef.current = returnTo;
+  }, [returnTo]);
+  const { pageRange, restore } = reader;
+  const leaveForSearch = useCallback(() => {
+    if (!returnRef.current) {
+      const here = pageRange()?.start ?? null;
+      returnRef.current = here;
+      setReturnTo(here);
+    }
+  }, [pageRange]);
+  const goBack = useCallback(() => {
+    const spot = returnRef.current;
+    if (!spot) return false;
+    returnRef.current = null;
+    setReturnTo(null);
+    restore(spot);
+    return true;
+  }, [restore]);
+  // Search keeps the book's text only while it's open.
+  const { release: releaseSearch } = search;
+  useEffect(() => {
+    if (panel !== "search") releaseSearch();
+  }, [panel, releaseSearch]);
+
+  const onEscape = useCallback(() => {
+    goBack();
+    setPanel(null);
+  }, [goBack]);
+
+  const frameKey = useReaderKeys(reader, keyToggle, onEscape, audio, openPanel);
 
   // Taps on the page: left edge goes back, right edge goes forward, middle shows/hides controls.
   const onTap = useCallback(
@@ -223,13 +260,46 @@ export function Reader() {
         <SearchPanel
           search={search}
           onClose={closePanel}
-          onJump={(r) => {
-            goTo(r.cfi);
-            highlight(r.cfi, () => {}, "loam-find");
-            setTimeout(() => unhighlight(r.cfi), 2500);
+          onOpen={async (r) => {
+            const cfi = await search.locate(r);
+            if (!cfi) return;
+            leaveForSearch();
+            goTo(cfi);
+            highlight(cfi, () => {}, "loam-find");
+            setTimeout(() => unhighlight(cfi), 2500);
+            if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
+          }}
+          onOpenChapter={(i) => {
+            leaveForSearch();
+            jumpTo(i);
             if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
           }}
         />
+      )}
+      {returnTo && status === "ready" && (
+        <div className="absolute bottom-[calc(3.75rem+env(safe-area-inset-bottom))] left-1/2 z-40 flex -translate-x-1/2 items-center rounded-full border border-border bg-card shadow-lg">
+          <button
+            type="button"
+            onClick={() => {
+              goBack();
+              closePanel();
+            }}
+            className="flex items-center gap-2 py-2 pr-2 pl-4 text-sm transition-colors hover:text-primary pointer-coarse:py-3"
+          >
+            <CornerUpLeft className="size-4 text-primary" />
+            Back to where you were
+            <kbd className="rounded border border-border bg-secondary px-1.5 font-mono text-[10px] text-muted-foreground pointer-coarse:hidden">Esc</kbd>
+          </button>
+          <button
+            type="button"
+            aria-label="Stay here"
+            title="Stay here"
+            onClick={() => setReturnTo(null)}
+            className="mr-1 flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted pointer-coarse:size-10"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
       )}
       {selection && !panel && (
         <NoteCard

@@ -30,3 +30,12 @@ export const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5];
 const RATE_KEY = "loam:audio-rate";
 export const loadRate = () => Number(localStorage.getItem(RATE_KEY)) || 1;
 export const saveRate = (r: number) => localStorage.setItem(RATE_KEY, String(r));
+
+export function formatTime(s: number) {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return `${h ? `${h}:` : ""}${mm}:${String(sec).padStart(2, "0")}`;
+}

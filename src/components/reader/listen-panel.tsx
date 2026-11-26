@@ -3,20 +3,12 @@
 import { useRef, useState } from "react";
 import { BookOpen, Link2, Pause, Play, RotateCcw, RotateCw, SkipBack, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SPEEDS } from "@/lib/audio";
+import { SPEEDS, formatTime } from "@/lib/audio";
 import { cn } from "@/lib/utils";
 import { Sheet } from "./sheet";
 import type { Audiobook } from "./use-audiobook";
 import type { Sync } from "./use-sync";
 
-export function formatTime(s: number) {
-  if (!Number.isFinite(s) || s < 0) s = 0;
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  const mm = h ? String(m).padStart(2, "0") : String(m);
-  return `${h ? `${h}:` : ""}${mm}:${String(sec).padStart(2, "0")}`;
-}
 
 export function ListenPanel({ audio, sync, onClose }: { audio: Audiobook; sync: Sync; onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
