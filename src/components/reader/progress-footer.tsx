@@ -1,10 +1,14 @@
 "use client";
 
+import { cn } from "@/lib/utils";
+
 export function ProgressFooter({
   chapter,
   pagesLeft,
   percent,
+  className,
 }: {
+  className?: string;
   chapter: string | null;
   pagesLeft: number | null;
   percent: number | null;
@@ -18,7 +22,10 @@ export function ProgressFooter({
 
   return (
     <footer
-      className="absolute inset-x-0 bottom-0 z-20 px-[max(1.25rem,6vw)] pb-[max(1rem,env(safe-area-inset-bottom))]"
+      className={cn(
+        "absolute inset-x-0 bottom-0 z-20 px-[max(1.25rem,6vw)] pb-[max(1rem,env(safe-area-inset-bottom))]",
+        className,
+      )}
       aria-label="Reading progress"
     >
       <div className="mb-2 flex items-baseline justify-between gap-4 text-[11px] text-muted-foreground">

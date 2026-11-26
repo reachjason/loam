@@ -31,16 +31,32 @@ interface LoamDB extends DBSchema {
   books: { key: string; value: Book; indexes: { openedAt: number } };
   files: { key: string; value: Blob };
   locations: { key: string; value: string }; // epub.js locations JSON, cached per book
+  notes: { key: string; value: Note; indexes: { bookId: string } };
 }
+
+export type Note = {
+  id: string;
+  bookId: string;
+  /** Where the note was written: a range CFI when it quotes a passage, otherwise the page's start. */
+  cfi: string;
+  chapter: string | null;
+  quote: string | null;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
+};
 
 let dbPromise: Promise<IDBPDatabase<LoamDB>> | null = null;
 
-function db() {
-  dbPromise ??= openDB<LoamDB>("loam", 1, {
-    upgrade(d) {
-      d.createObjectStore("books", { keyPath: "id" }).createIndex("openedAt", "openedAt");
-      d.createObjectStore("files");
-      d.createObjectStore("locations");
+export function db() {
+  dbPromise ??= openDB<LoamDB>("loam", 2, {
+    upgrade(d, oldVersion) {
+      if (oldVersion < 1) {
+        d.createObjectStore("books", { keyPath: "id" }).createIndex("openedAt", "openedAt");
+        d.createObjectStore("files");
+        d.createObjectStore("locations");
+      }
+      if (oldVersion < 2) d.createObjectStore("notes", { keyPath: "id" }).createIndex("bookId", "bookId");
     },
   });
   return dbPromise;
@@ -90,11 +106,15 @@ export async function addEpub(file: File): Promise<Book> {
 
 export async function removeBook(id: string) {
   const d = await db();
-  const tx = d.transaction(["books", "files", "locations"], "readwrite");
+  const tx = d.transaction(["books", "files", "locations", "notes"], "readwrite");
+  const notes = tx.objectStore("notes");
+  const noteIds = await notes.index("bookId").getAllKeys(id);
   await Promise.all([
     tx.objectStore("books").delete(id),
     tx.objectStore("files").delete(id),
+    tx.objectStore("files").delete(`${id}:audio`),
     tx.objectStore("locations").delete(id),
+    ...noteIds.map((k) => notes.delete(k)),
     tx.done,
   ]);
 }

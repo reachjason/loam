@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Keyboard, List } from "lucide-react";
+import { ArrowLeft, Headphones, Keyboard, List, NotebookPen, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Panel } from "./config";
@@ -9,12 +9,14 @@ export function TopBar({
   title,
   visible,
   panel,
+  playing,
   onToggle,
   onBack,
 }: {
   title: string | undefined;
   visible: boolean;
   panel: Panel | null;
+  playing: boolean;
   onToggle: (p: Panel) => void;
   onBack: () => void;
 }) {
@@ -34,8 +36,24 @@ export function TopBar({
         <Button variant="ghost" size="icon" aria-label="Keyboard shortcuts" className={cn(icon("keys"), "pointer-coarse:hidden")} onClick={() => onToggle("keys")}>
           <Keyboard />
         </Button>
+        <Button variant="ghost" size="icon" aria-label="Search" className={icon("search")} onClick={() => onToggle("search")}>
+          <Search />
+        </Button>
         <Button variant="ghost" size="icon" aria-label="Contents" className={icon("toc")} onClick={() => onToggle("toc")}>
           <List />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={playing ? "Listen (playing)" : "Listen"}
+          className={cn(icon("listen"), "relative")}
+          onClick={() => onToggle("listen")}
+        >
+          <Headphones />
+          {playing && <span className="absolute top-1 right-1 size-1.5 animate-pulse rounded-full bg-primary" />}
+        </Button>
+        <Button variant="ghost" size="icon" aria-label="Notes" className={icon("notes")} onClick={() => onToggle("notes")}>
+          <NotebookPen />
         </Button>
         <Button variant="ghost" size="icon" aria-label="Text settings" className={cn(icon("type"), "font-serif text-base")} onClick={() => onToggle("type")}>
           Aa

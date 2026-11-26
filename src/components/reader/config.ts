@@ -5,10 +5,20 @@ export const FONT_STEPS = [85, 95, 105, 115, 125, 140, 160];
 export const LINE_STEPS = [1.4, 1.55, 1.65, 1.8, 2];
 export const IDLE_MS = 2200;
 
+export const AUDIO_SHORTCUTS: [string, string][] = [
+  ["K", "Play / pause"],
+  ["⇧←  ⇧→", "Back 15s / forward 30s"],
+  ["⇧[  ⇧]", "Previous / next audio chapter"],
+  [",  .", "Slower / faster"],
+  ["L", "Listen tab"],
+];
+
 export const SHORTCUTS: [string, string][] = [
   ["← →  or  Space ⇧Space", "Previous / next page"],
   ["[  ]", "Previous / next chapter"],
+  ["/  or  ⌘F", "Search this book"],
   ["C", "Contents"],
+  ["W", "Notes (select text first to quote it)"],
   ["P", "Show / hide progress"],
   ["−  =", "Smaller / larger text"],
   ["N", "Parchment / night"],
@@ -16,7 +26,7 @@ export const SHORTCUTS: [string, string][] = [
   ["?", "Shortcuts"],
 ];
 
-export type Panel = "toc" | "type" | "keys";
+export type Panel = "toc" | "search" | "notes" | "listen" | "type" | "keys";
 
 /** A table-of-contents entry, resolved to its spine section and optional #anchor. */
 export type Entry = { label: string; href: string; depth: number; spine: number; hash: string | null };

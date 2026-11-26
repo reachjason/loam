@@ -7,11 +7,19 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { IDLE_MS, type Panel } from "./config";
 import { ContentsPanel } from "./contents-panel";
+import { NotesPanel, type Draft } from "./notes-panel";
 import { ProgressFooter } from "./progress-footer";
 import { SettingsPanel } from "./settings-panel";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 import { TopBar } from "./top-bar";
 import { useEpubReader, type FrameEvents } from "./use-epub-reader";
+import { ListenPanel } from "./listen-panel";
+import { SearchPanel } from "./search-panel";
+import { useBookSearch } from "./use-book-search";
+import { MiniPlayer } from "./mini-player";
+import { useAudiobook } from "./use-audiobook";
+import { useNotes } from "./use-notes";
+import { useSync } from "./use-sync";
 import { useReaderKeys } from "./use-reader-keys";
 
 export function Reader() {
@@ -20,7 +28,8 @@ export function Reader() {
   const viewRef = useRef<HTMLDivElement>(null);
   const events = useRef<FrameEvents>({ key: () => {}, tap: () => {}, activity: () => {} });
   const reader = useEpubReader(id, viewRef, events);
-  const { meta, status, toc, chapterIdx, pagesLeft, percent, prefs, updatePrefs, next, prev, jumpTo, flush } = reader;
+  const { meta, status, toc, chapterIdx, pagesLeft, percent, prefs, updatePrefs, next, prev, jumpTo, goTo, capture, highlight, unhighlight, flush } =
+    reader;
 
   const [panel, setPanel] = useState<Panel | null>(null);
   const [chrome, setChrome] = useState(true);
@@ -48,9 +57,34 @@ export function Reader() {
     return () => window.removeEventListener("mousemove", poke);
   }, [poke]);
 
-  const togglePanel = useCallback((p: Panel) => setPanel((cur) => (cur === p ? null : p)), []);
+  // ---- notes: opening the panel captures the selected passage (or the current page) ----
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [focusNote, setFocusNote] = useState<string | null>(null);
+  const togglePanel = useCallback(
+    (p: Panel) => {
+      if (p === "notes" && panelRef.current !== "notes") {
+        setDraft(capture());
+        setFocusNote(null);
+      }
+      setPanel((cur) => (cur === p ? null : p));
+    },
+    [capture],
+  );
   const closePanel = useCallback(() => setPanel(null), []);
-  const frameKey = useReaderKeys(reader, togglePanel, closePanel);
+  const openNote = useCallback(
+    (id: string) => {
+      setDraft(capture());
+      setFocusNote(id);
+      setPanel("notes");
+    },
+    [capture],
+  );
+  const notes = useNotes(id, reader, openNote);
+  const audio = useAudiobook(id, meta);
+  const sync = useSync(id, reader, audio);
+  const search = useBookSearch(reader);
+  const openPanel = useCallback((p: Panel) => setPanel(p), []);
+  const frameKey = useReaderKeys(reader, togglePanel, closePanel, audio, openPanel);
 
   // Taps on the page: left edge goes back, right edge goes forward, middle shows/hides controls.
   const onTap = useCallback(
@@ -68,6 +102,7 @@ export function Reader() {
   }, [frameKey, onTap, poke]);
 
   const showChrome = chrome || panel !== null || status !== "ready";
+  const showMini = status === "ready" && !!audio.file && audio.started && panel !== "listen";
 
   return (
     <div
@@ -78,6 +113,7 @@ export function Reader() {
         title={meta?.title}
         visible={showChrome}
         panel={panel}
+        playing={audio.playing}
         onToggle={togglePanel}
         onBack={() => {
           flush();
@@ -107,8 +143,15 @@ export function Reader() {
       </div>
 
       {prefs.showProgress && status === "ready" && (
-        <ProgressFooter chapter={toc[chapterIdx]?.label ?? null} pagesLeft={pagesLeft} percent={percent} />
+        <ProgressFooter
+          chapter={toc[chapterIdx]?.label ?? null}
+          pagesLeft={pagesLeft}
+          percent={percent}
+          className={showMini ? "max-sm:hidden" : undefined}
+        />
       )}
+
+      {showMini && <MiniPlayer audio={audio} dim={!showChrome} onOpen={() => togglePanel("listen")} />}
 
       {panel === "toc" && (
         <ContentsPanel
@@ -121,6 +164,41 @@ export function Reader() {
           }}
         />
       )}
+      {panel === "search" && (
+        <SearchPanel
+          search={search}
+          onClose={closePanel}
+          onJump={(r) => {
+            goTo(r.cfi);
+            highlight(r.cfi, () => {}, "loam-find");
+            setTimeout(() => unhighlight(r.cfi), 2500);
+            if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
+          }}
+        />
+      )}
+      {panel === "notes" && (
+        <NotesPanel
+          notes={notes.notes}
+          draft={draft}
+          focusId={focusNote}
+          onDropQuote={() => setDraft((d) => d && { ...d, quote: null, cfi: capture()?.cfi ?? d.cfi })}
+          onAdd={async (text) => {
+            if (!draft) return;
+            const note = await notes.add({ ...draft, text });
+            setFocusNote(note.id);
+            setDraft(capture());
+          }}
+          onEdit={notes.edit}
+          onRemove={notes.remove}
+          onJump={(n) => {
+            goTo(n.cfi);
+            setFocusNote(n.id);
+            if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
+          }}
+          onClose={closePanel}
+        />
+      )}
+      {panel === "listen" && <ListenPanel audio={audio} sync={sync} onClose={closePanel} />}
       {panel === "type" && <SettingsPanel prefs={prefs} onChange={updatePrefs} onClose={closePanel} />}
       {panel === "keys" && <ShortcutsDialog onClose={closePanel} />}
     </div>

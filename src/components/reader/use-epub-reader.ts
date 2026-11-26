@@ -48,6 +48,7 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
   const movedRef = useRef(false);
   const pendingChapter = useRef<number | null>(null);
   const stickyChapter = useRef<{ idx: number; anchor: string | null } | null>(null);
+  const cfiRef = useRef<EpubCFI | null>(null);
 
   const [meta, setMeta] = useState<Book | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "missing" | "error">("loading");
@@ -56,6 +57,8 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
   const [pagesLeft, setPagesLeft] = useState<number | null>(null);
   const [percent, setPercent] = useState<number | null>(null);
   const [prefs, setPrefs] = useState<ReaderPrefs>(loadPrefs);
+  /** The location index is built; positions can be turned into fractions of the book and back. */
+  const [located, setLocated] = useState(false);
 
   const prefsRef = useRef(prefs);
   const chapterRef = useRef(chapterIdx);
@@ -96,6 +99,86 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     void rendRef.current?.display(target.href);
   }, []);
   const goChapter = useCallback((dir: 1 | -1) => jumpTo(chapterRef.current + dir), [jumpTo]);
+  const goTo = useCallback((cfi: string) => {
+    movedRef.current = true;
+    stickyChapter.current = null;
+    void rendRef.current?.display(cfi);
+  }, []);
+
+  /** Where a note written now belongs: the selected passage if there is one, otherwise the current page. */
+  const capture = useCallback((): { cfi: string; quote: string | null; chapter: string | null } | null => {
+    const r = rendRef.current;
+    const cfi = anchorRef.current ?? r?.location?.start?.cfi;
+    if (!r || !cfi) return null;
+    const chapter = entriesRef.current[chapterRef.current]?.label ?? null;
+    for (const c of r.getContents() as unknown as Contents[]) {
+      const sel = c.window.getSelection();
+      const text = sel?.toString().replace(/\s+/g, " ").trim();
+      if (sel && text && sel.rangeCount) {
+        const range = c.cfiFromRange(sel.getRangeAt(0));
+        sel.removeAllRanges();
+        return { cfi: range, quote: text, chapter };
+      }
+    }
+    return { cfi, quote: null, chapter };
+  }, []);
+
+  const highlight = useCallback((cfi: string, onClick: () => void, className = "loam-hl") => {
+    // Colors live in globals.css so they follow the reader's theme.
+    rendRef.current?.annotations.highlight(cfi, {}, onClick, className, {});
+  }, []);
+  /** Every section of the book, loaded (for searching). */
+  const loadSections = useCallback(async () => {
+    const b = bookRef.current;
+    if (!b) return [];
+    const items: { index: number; load: (r: unknown) => Promise<unknown>; cfiFromRange: (r: Range) => string; linear?: boolean | string }[] = [];
+    b.spine.each((s: (typeof items)[number]) => items.push(s));
+    return Promise.all(
+      items.map(async (s) => ({
+        index: s.index,
+        doc: ((await s.load(b.load.bind(b)).catch(() => null)) as Element | null)?.ownerDocument ?? null,
+        cfiFromRange: (r: Range) => s.cfiFromRange(r),
+      })),
+    );
+  }, []);
+  const unhighlight = useCallback((cfi: string) => rendRef.current?.annotations.remove(cfi, "highlight"), []);
+  /** Position as a fraction of the whole text (0..1), or null until locations are ready. */
+  const fractionOf = useCallback((cfi: string) => {
+    const b = bookRef.current;
+    return b?.locations.length() ? b.locations.percentageFromCfi(cfi) : null;
+  }, []);
+  const cfiAt = useCallback((f: number) => {
+    const b = bookRef.current;
+    return b?.locations.length() ? b.locations.cfiFromPercentage(Math.max(0, Math.min(1, f))) : null;
+  }, []);
+  /** First and last position on the page(s) on screen. */
+  const pageRange = useCallback(() => {
+    const loc = rendRef.current?.location;
+    return loc ? { start: anchorRef.current ?? loc.start.cfi, end: loc.end.cfi } : null;
+  }, []);
+  /** Where each contents entry starts, as a CFI (loads sections whose entries point at #anchors). */
+  const entryStarts = useCallback(async (): Promise<(string | null)[]> => {
+    const b = bookRef.current;
+    if (!b) return [];
+    return Promise.all(
+      entriesRef.current.map(async (e) => {
+        const section = b.spine.get(e.spine);
+        if (!section) return null;
+        if (!e.hash) return `epubcfi(${section.cfiBase}!/4)`;
+        try {
+          // load() resolves to the section's root element
+          const root = (await section.load(b.load.bind(b))) as unknown as Element;
+          const el = root.ownerDocument.getElementById(e.hash);
+          return el ? section.cfiFromElement(el) : `epubcfi(${section.cfiBase}!/4)`;
+        } catch {
+          return `epubcfi(${section.cfiBase}!/4)`;
+        }
+      }),
+    );
+  }, []);
+
+  /** Reading order of two CFIs (negative when `a` comes first). */
+  const compareCfi = useCallback((a: string, b: string) => cfiRef.current?.compare(a, b) ?? 0, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +192,7 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
 
       const mod = await import("epubjs");
       const cfiTool: EpubCFI = new mod.EpubCFI();
+      cfiRef.current = cfiTool;
       const book = mod.default(await file.arrayBuffer());
       bookRef.current = book;
 
@@ -249,6 +333,7 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
         void saveLocations(id, book.locations.save());
       }
       if (cancelled) return;
+      setLocated(true);
       const cur = anchorRef.current;
       if (cur) {
         const pct = book.locations.percentageFromCfi(cur);
@@ -305,6 +390,17 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     prev,
     jumpTo,
     goChapter,
+    goTo,
+    capture,
+    located,
+    fractionOf,
+    cfiAt,
+    pageRange,
+    entryStarts,
+    loadSections,
+    highlight,
+    unhighlight,
+    compareCfi,
     flush,
   };
 }
