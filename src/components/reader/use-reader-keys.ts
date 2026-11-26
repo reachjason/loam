@@ -16,6 +16,7 @@ export function useReaderKeys(
   closePanel: () => void,
   audio: Audiobook,
   openPanel: (p: Panel) => void,
+  lookup: () => void,
 ) {
   const { toggle, skip, goChapter: audioChapter, setRate, rate } = audio;
   const { next, prev, goChapter, updatePrefs, prefs } = reader;
@@ -55,6 +56,7 @@ export function useReaderKeys(
         "[": () => goChapter(-1),
         c: () => togglePanel("toc"),
         "/": () => openPanel("search"),
+        d: lookup,
         w: () => togglePanel("notes"),
         l: () => togglePanel("listen"),
         k: toggle,
@@ -72,7 +74,7 @@ export function useReaderKeys(
       if (!fromBook) e.preventDefault();
       action();
     },
-    [next, prev, goChapter, updatePrefs, togglePanel, openPanel, closePanel, toggle, skip, audioChapter, setRate, rate],
+    [next, prev, goChapter, updatePrefs, togglePanel, openPanel, lookup, closePanel, toggle, skip, audioChapter, setRate, rate],
   );
 
   useEffect(() => {

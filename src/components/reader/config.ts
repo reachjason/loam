@@ -19,6 +19,7 @@ export const SHORTCUTS: [string, string][] = [
   ["/  or  ⌘F", "Search this book"],
   ["C", "Contents"],
   ["W", "Notes (select text first to quote it)"],
+  ["D", "Look up selected text on Google"],
   ["P", "Show / hide progress"],
   ["−  =", "Smaller / larger text"],
   ["N", "Parchment / night"],

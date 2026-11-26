@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import { NotebookPen } from "lucide-react";
+import { NotebookPen, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { BookSelection } from "./use-epub-reader";
 
@@ -16,6 +16,7 @@ export function NoteCard({
   open,
   chapter,
   onOpen,
+  onLookup,
   onSave,
   onClose,
 }: {
@@ -23,6 +24,8 @@ export function NoteCard({
   open: boolean;
   chapter: string | null;
   onOpen: () => void;
+  /** Look the selected text up on Google (new tab). */
+  onLookup: () => void;
   onSave: (text: string) => Promise<void>;
   onClose: () => void;
 }) {
@@ -57,16 +60,25 @@ export function NoteCard({
 
   if (!open) {
     return (
-      <div ref={ref} style={style} className="fixed z-40">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()} // keep the book's selection
-          onClick={onOpen}
-          className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs shadow-lg transition-colors hover:bg-secondary pointer-coarse:px-4 pointer-coarse:py-2.5"
-        >
-          <NotebookPen className="size-3.5 text-primary" /> Note
-          <kbd className="ml-1 font-mono text-[10px] text-muted-foreground pointer-coarse:hidden">W</kbd>
-        </button>
+      <div ref={ref} style={style} className="fixed z-40 flex items-center rounded-full border border-border bg-card text-xs shadow-lg">
+        {[
+          { label: "Note", key: "W", icon: NotebookPen, onClick: onOpen },
+          { label: "Look up", key: "D", icon: Search, onClick: onLookup },
+        ].map(({ label, key, icon: Icon, onClick }, i) => (
+          <button
+            key={label}
+            type="button"
+            onMouseDown={(e) => e.preventDefault()} // keep the book's selection
+            onClick={onClick}
+            className={
+              "flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors hover:bg-secondary pointer-coarse:px-4 pointer-coarse:py-2.5" +
+              (i ? " border-l border-border/70" : "")
+            }
+          >
+            <Icon className="size-3.5 text-primary" /> {label}
+            <kbd className="ml-0.5 font-mono text-[10px] text-muted-foreground pointer-coarse:hidden">{key}</kbd>
+          </button>
+        ))}
       </div>
     );
   }

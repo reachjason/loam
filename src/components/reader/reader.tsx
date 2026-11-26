@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -10,7 +10,11 @@ import { IDLE_MS, type Panel } from "./config";
 import type { Draft } from "./notes-panel";
 import { ProgressFooter } from "./progress-footer";
 import { TopBar } from "./top-bar";
-import { useEpubReader, type BookSelection, type FrameEvents } from "./use-epub-reader";
+import {
+  useEpubReader,
+  type BookSelection,
+  type FrameEvents,
+} from "./use-epub-reader";
 import { useBookSearch } from "./use-book-search";
 import { MiniPlayer } from "./mini-player";
 import { useAudiobook } from "./use-audiobook";
@@ -19,22 +23,55 @@ import { useSync } from "./use-sync";
 import { useReaderKeys } from "./use-reader-keys";
 
 // Panels load the first time they're opened, not with the reader.
-const ContentsPanel = dynamic(() => import("./contents-panel").then((m) => m.ContentsPanel));
+const ContentsPanel = dynamic(() =>
+  import("./contents-panel").then((m) => m.ContentsPanel),
+);
 const NoteCard = dynamic(() => import("./note-card").then((m) => m.NoteCard));
-const NotesPanel = dynamic(() => import("./notes-panel").then((m) => m.NotesPanel));
-const SettingsPanel = dynamic(() => import("./settings-panel").then((m) => m.SettingsPanel));
-const ShortcutsDialog = dynamic(() => import("./shortcuts-dialog").then((m) => m.ShortcutsDialog));
-const ListenPanel = dynamic(() => import("./listen-panel").then((m) => m.ListenPanel));
-const SearchPanel = dynamic(() => import("./search-panel").then((m) => m.SearchPanel));
+const NotesPanel = dynamic(() =>
+  import("./notes-panel").then((m) => m.NotesPanel),
+);
+const SettingsPanel = dynamic(() =>
+  import("./settings-panel").then((m) => m.SettingsPanel),
+);
+const ShortcutsDialog = dynamic(() =>
+  import("./shortcuts-dialog").then((m) => m.ShortcutsDialog),
+);
+const ListenPanel = dynamic(() =>
+  import("./listen-panel").then((m) => m.ListenPanel),
+);
+const SearchPanel = dynamic(() =>
+  import("./search-panel").then((m) => m.SearchPanel),
+);
 
 export function Reader() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const viewRef = useRef<HTMLDivElement>(null);
-  const events = useRef<FrameEvents>({ key: () => {}, tap: () => {}, activity: () => {}, select: () => {} });
+  const events = useRef<FrameEvents>({
+    key: () => {},
+    tap: () => {},
+    activity: () => {},
+    select: () => {},
+  });
   const reader = useEpubReader(id, viewRef, events);
-  const { meta, status, toc, chapterIdx, pagesLeft, percent, prefs, updatePrefs, next, prev, jumpTo, goTo, capture, highlight, unhighlight, flush } =
-    reader;
+  const {
+    meta,
+    status,
+    toc,
+    chapterIdx,
+    pagesLeft,
+    percent,
+    prefs,
+    updatePrefs,
+    next,
+    prev,
+    jumpTo,
+    goTo,
+    capture,
+    highlight,
+    unhighlight,
+    flush,
+  } = reader;
 
   const [panel, setPanel] = useState<Panel | null>(null);
   const [chrome, setChrome] = useState(true);
@@ -44,10 +81,15 @@ export function Reader() {
   }, [panel]);
 
   // ---- controls fade away while reading ---------------------------------
-  const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const scheduleHide = useCallback(() => {
     clearTimeout(idleTimer.current);
-    idleTimer.current = setTimeout(() => !panelRef.current && setChrome(false), IDLE_MS);
+    idleTimer.current = setTimeout(
+      () => !panelRef.current && setChrome(false),
+      IDLE_MS,
+    );
   }, []);
   const poke = useCallback(() => {
     setChrome(true);
@@ -176,7 +218,13 @@ export function Reader() {
     setPanel(null);
   }, [goBack]);
 
-  const frameKey = useReaderKeys(reader, keyToggle, onEscape, audio, openPanel);
+  // Look up the selected text on Google, in a new tab.
+  const lookup = useCallback(() => {
+    const q = (selectionRef.current ?? currentSelection())?.quote;
+    if (q) window.open(`https://www.google.com/search?q=${encodeURIComponent(q)}`, "_blank", "noopener");
+  }, [currentSelection]);
+
+  const frameKey = useReaderKeys(reader, keyToggle, onEscape, audio, openPanel, lookup);
 
   // Taps on the page: left edge goes back, right edge goes forward, middle shows/hides controls.
   const onTap = useCallback(
@@ -190,11 +238,17 @@ export function Reader() {
   );
 
   useEffect(() => {
-    events.current = { key: frameKey, tap: onTap, activity: poke, select: onSelect };
+    events.current = {
+      key: frameKey,
+      tap: onTap,
+      activity: poke,
+      select: onSelect,
+    };
   }, [frameKey, onTap, poke, onSelect]);
 
   const showChrome = chrome || panel !== null || status !== "ready";
-  const showMini = status === "ready" && !!audio.file && audio.started && panel !== "listen";
+  const showMini =
+    status === "ready" && !!audio.file && audio.started && panel !== "listen";
 
   return (
     <div
@@ -220,16 +274,27 @@ export function Reader() {
 
         {status !== "ready" && (
           <div className="absolute inset-0 flex items-center justify-center px-6">
-            {status === "loading" && <p className="font-serif text-muted-foreground italic">Opening…</p>}
+            {status === "loading" && (
+              <p className="font-serif text-muted-foreground italic">
+                Opening…
+              </p>
+            )}
             {status === "missing" && (
               <p className="text-center text-sm text-muted-foreground">
                 This book isn&apos;t on your shelf anymore.{" "}
-                <Link href="/" className="text-primary underline underline-offset-4">
+                <Link
+                  href="/"
+                  className="text-primary underline underline-offset-4"
+                >
                   Back to shelf
                 </Link>
               </p>
             )}
-            {status === "error" && <p className="text-sm text-destructive">Couldn&apos;t open this book.</p>}
+            {status === "error" && (
+              <p className="text-sm text-destructive">
+                Couldn&apos;t open this book.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -243,116 +308,157 @@ export function Reader() {
         />
       )}
 
-      {showMini && <MiniPlayer audio={audio} dim={!showChrome} onOpen={() => togglePanel("listen")} />}
+      {showMini && (
+        <MiniPlayer
+          audio={audio}
+          dim={!showChrome}
+          onOpen={() => togglePanel("listen")}
+        />
+      )}
 
-      {panel === "toc" && (
-        <ContentsPanel
-          toc={toc}
-          current={chapterIdx}
-          onClose={closePanel}
-          onPick={(i) => {
-            jumpTo(i);
-            closePanel();
-          }}
-        />
-      )}
-      {panel === "search" && (
-        <SearchPanel
-          search={search}
-          onClose={closePanel}
-          onOpen={async (r) => {
-            const cfi = await search.locate(r);
-            if (!cfi) return;
-            leaveForSearch();
-            goTo(cfi);
-            highlight(cfi, () => {}, "loam-find");
-            setTimeout(() => unhighlight(cfi), 2500);
-            if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
-          }}
-          onOpenChapter={(i) => {
-            leaveForSearch();
-            jumpTo(i);
-            if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
-          }}
-        />
-      )}
-      {returnTo && status === "ready" && (
-        <div className="absolute bottom-[calc(3.75rem+env(safe-area-inset-bottom))] left-1/2 z-40 flex -translate-x-1/2 items-center rounded-full border border-border bg-card shadow-lg">
-          <button
-            type="button"
-            onClick={() => {
-              goBack();
+      {/* Panels load on first open; only they wait for their code, never the book. */}
+      <Suspense fallback={null}>
+        {panel === "toc" && (
+          <ContentsPanel
+            toc={toc}
+            current={chapterIdx}
+            onClose={closePanel}
+            onPick={(i) => {
+              jumpTo(i);
               closePanel();
             }}
-            className="flex items-center gap-2 py-2 pr-2 pl-4 text-sm transition-colors hover:text-primary pointer-coarse:py-3"
-          >
-            <CornerUpLeft className="size-4 text-primary" />
-            Back to where you were
-            <kbd className="rounded border border-border bg-secondary px-1.5 font-mono text-[10px] text-muted-foreground pointer-coarse:hidden">Esc</kbd>
-          </button>
-          <button
-            type="button"
-            aria-label="Stay here"
-            title="Stay here"
-            onClick={() => setReturnTo(null)}
-            className="mr-1 flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted pointer-coarse:size-10"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
-      {selection && !panel && (
-        <NoteCard
-          selection={selection}
-          open={cardOpen}
-          chapter={toc[chapterIdx]?.label ?? null}
-          onOpen={() => setCardOpen(true)}
-          onClose={dropSelection}
-          onSave={async (text) => {
-            await notes.add({ cfi: selection.cfi, quote: selection.quote, chapter: toc[chapterIdx]?.label ?? null, text });
-            dropSelection();
-          }}
-        />
-      )}
-      {panel === "notes" && (
-        <NotesPanel
-          notes={notes.notes}
-          draft={draft}
-          focusId={focusNote}
-          onDropQuote={() => setDraft((d) => d && { ...d, quote: null, cfi: capture()?.cfi ?? d.cfi })}
-          onAdd={async (text) => {
-            if (!draft) return;
-            const note = await notes.add({ ...draft, text });
-            setFocusNote(note.id);
-            setDraft(capture());
-            resumeAfterNote();
-          }}
-          onEdit={notes.edit}
-          onRemove={notes.remove}
-          onJump={(n) => {
-            goTo(n.cfi);
-            setFocusNote(n.id);
-            if (!window.matchMedia("(min-width: 640px)").matches) closePanel();
-          }}
-          onClose={closePanel}
-        />
-      )}
-      {panel === "listen" && <ListenPanel audio={audio} sync={sync} onClose={closePanel} />}
-      {panel === "type" && <SettingsPanel prefs={prefs} onChange={updatePrefs} onClose={closePanel} />}
-      {panel === "keys" && <ShortcutsDialog onClose={closePanel} />}
+          />
+        )}
+        {panel === "search" && (
+          <SearchPanel
+            search={search}
+            onClose={closePanel}
+            onOpen={async (r) => {
+              const cfi = await search.locate(r);
+              if (!cfi) return;
+              leaveForSearch();
+              goTo(cfi);
+              highlight(cfi, () => {}, "loam-find");
+              setTimeout(() => unhighlight(cfi), 2500);
+              if (!window.matchMedia("(min-width: 640px)").matches)
+                closePanel();
+            }}
+            onOpenChapter={(i) => {
+              leaveForSearch();
+              jumpTo(i);
+              if (!window.matchMedia("(min-width: 640px)").matches)
+                closePanel();
+            }}
+          />
+        )}
+        {returnTo && status === "ready" && (
+          <div className="absolute bottom-[calc(3.75rem+env(safe-area-inset-bottom))] left-1/2 z-40 flex -translate-x-1/2 items-center rounded-full border border-border bg-card shadow-lg">
+            <button
+              type="button"
+              onClick={() => {
+                goBack();
+                closePanel();
+              }}
+              className="flex items-center gap-2 py-2 pr-2 pl-4 text-sm transition-colors hover:text-primary pointer-coarse:py-3"
+            >
+              <CornerUpLeft className="size-4 text-primary" />
+              Back to where you were
+              <kbd className="rounded border border-border bg-secondary px-1.5 font-mono text-[10px] text-muted-foreground pointer-coarse:hidden">
+                Esc
+              </kbd>
+            </button>
+            <button
+              type="button"
+              aria-label="Stay here"
+              title="Stay here"
+              onClick={() => setReturnTo(null)}
+              className="mr-1 flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted pointer-coarse:size-10"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
+        {selection && !panel && (
+          <NoteCard
+            selection={selection}
+            open={cardOpen}
+            chapter={toc[chapterIdx]?.label ?? null}
+            onOpen={() => setCardOpen(true)}
+          onLookup={lookup}
+            onClose={dropSelection}
+            onSave={async (text) => {
+              await notes.add({
+                cfi: selection.cfi,
+                quote: selection.quote,
+                chapter: toc[chapterIdx]?.label ?? null,
+                text,
+              });
+              dropSelection();
+            }}
+          />
+        )}
+        {panel === "notes" && (
+          <NotesPanel
+            notes={notes.notes}
+            draft={draft}
+            focusId={focusNote}
+            onDropQuote={() =>
+              setDraft(
+                (d) => d && { ...d, quote: null, cfi: capture()?.cfi ?? d.cfi },
+              )
+            }
+            onAdd={async (text) => {
+              if (!draft) return;
+              const note = await notes.add({ ...draft, text });
+              setFocusNote(note.id);
+              setDraft(capture());
+              resumeAfterNote();
+            }}
+            onEdit={notes.edit}
+            onRemove={notes.remove}
+            onJump={(n) => {
+              goTo(n.cfi);
+              setFocusNote(n.id);
+              if (!window.matchMedia("(min-width: 640px)").matches)
+                closePanel();
+            }}
+            onClose={closePanel}
+          />
+        )}
+        {panel === "listen" && (
+          <ListenPanel audio={audio} sync={sync} onClose={closePanel} />
+        )}
+        {panel === "type" && (
+          <SettingsPanel
+            prefs={prefs}
+            onChange={updatePrefs}
+            onClose={closePanel}
+          />
+        )}
+        {panel === "keys" && <ShortcutsDialog onClose={closePanel} />}
+      </Suspense>
     </div>
   );
 }
 
 /** Page-turn zones in the margins. On touch screens, tapping or swiping the text works too. */
-function EdgeButton({ side, onClick }: { side: "left" | "right"; onClick: () => void }) {
+function EdgeButton({
+  side,
+  onClick,
+}: {
+  side: "left" | "right";
+  onClick: () => void;
+}) {
   const Icon = side === "left" ? ChevronLeft : ChevronRight;
   return (
     <button
       type="button"
       aria-label={side === "left" ? "Previous page" : "Next page"}
       onClick={onClick}
-      className={cn("group absolute inset-y-0 z-10 flex w-[max(1.25rem,6vw)] items-center justify-center", side === "left" ? "left-0" : "right-0")}
+      className={cn(
+        "group absolute inset-y-0 z-10 flex w-[max(1.25rem,6vw)] items-center justify-center",
+        side === "left" ? "left-0" : "right-0",
+      )}
     >
       <Icon className="size-5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-60" />
     </button>
