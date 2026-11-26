@@ -168,3 +168,19 @@ async function readEpubMeta(file: File) {
     book.destroy();
   }
 }
+
+/** What's attached to each book, for the shelf: note counts and whether an audiobook is stored. Reads keys only. */
+export async function shelfExtras(): Promise<{ notes: Map<string, number>; audio: Set<string> }> {
+  const d = await db();
+  const notes = new Map<string, number>();
+  let cursor = await d.transaction("notes").store.index("bookId").openKeyCursor();
+  while (cursor) {
+    const id = cursor.key as string;
+    notes.set(id, (notes.get(id) ?? 0) + 1);
+    cursor = await cursor.continue();
+  }
+  const audio = new Set(
+    (await d.getAllKeys("files")).flatMap((k) => (typeof k === "string" && k.endsWith(":audio") ? [k.slice(0, -6)] : [])),
+  );
+  return { notes, audio };
+}

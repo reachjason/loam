@@ -17,6 +17,8 @@ export function useReaderKeys(
   audio: Audiobook,
   openPanel: (p: Panel) => void,
   lookup: () => void,
+  /** Gets first say on a key (e.g. shortcuts inside an open card); returns true if it handled it. */
+  intercept: (key: string) => boolean,
 ) {
   const { toggle, skip, goChapter: audioChapter, setRate, rate } = audio;
   const { next, prev, goChapter, updatePrefs, prefs } = reader;
@@ -37,6 +39,10 @@ export function useReaderKeys(
       if (t?.closest?.("input, textarea, [contenteditable]")) return;
       const p = prefsRef.current;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (intercept(k)) {
+        if (!fromBook) e.preventDefault();
+        return;
+      }
       const bigger = () => updatePrefs({ fontSize: step(FONT_STEPS, p.fontSize, 1) });
       const shifted: Record<string, () => void> = {
         ArrowLeft: () => skip(-15),
@@ -74,7 +80,7 @@ export function useReaderKeys(
       if (!fromBook) e.preventDefault();
       action();
     },
-    [next, prev, goChapter, updatePrefs, togglePanel, openPanel, lookup, closePanel, toggle, skip, audioChapter, setRate, rate],
+    [next, prev, goChapter, updatePrefs, togglePanel, openPanel, lookup, intercept, closePanel, toggle, skip, audioChapter, setRate, rate],
   );
 
   useEffect(() => {

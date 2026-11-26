@@ -107,14 +107,19 @@ export function Reader() {
   // ---- notes: opening the panel captures the selected passage (or the current page) ----
   // A passage selected in the book: offers a note card right beside it.
   const [selection, setSelection] = useState<BookSelection | null>(null);
-  const [cardOpen, setCardOpen] = useState(false);
+  /** The card by the selection: the small button, the note card, or the lookup card. */
+  const [cardMode, setCardMode] = useState<"pill" | "note" | "lookup">("pill");
+  const cardModeRef = useRef(cardMode);
+  useEffect(() => {
+    cardModeRef.current = cardMode;
+  }, [cardMode]);
   const selectionRef = useRef(selection);
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
   const onSelect = useCallback((s: BookSelection | null) => {
     setSelection(s);
-    if (!s) setCardOpen(false);
+    if (!s) setCardMode("pill");
   }, []);
 
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -138,7 +143,7 @@ export function Reader() {
         const s = selectionRef.current ?? currentSelection();
         if (s) {
           setSelection(s);
-          setCardOpen(true);
+          setCardMode("note");
           return;
         }
       }
@@ -170,19 +175,19 @@ export function Reader() {
   const writing = useRef(false); // a note is being written (panel or card)
   useEffect(() => {
     const was = writing.current;
-    const now = panel === "notes" || cardOpen;
+    const now = panel === "notes" || cardMode === "note";
     writing.current = now;
     if (now && !was && prefs.pauseForNotes && audio.playing) {
       pausedForNote.current = true;
       audio.pause();
     }
     if (was && !now) resumeAfterNote();
-  }, [panel, cardOpen, prefs.pauseForNotes, audio, resumeAfterNote]);
+  }, [panel, cardMode, prefs.pauseForNotes, audio, resumeAfterNote]);
 
   const dropSelection = useCallback(() => {
     reader.clearSelection();
     setSelection(null);
-    setCardOpen(false);
+    setCardMode("pill");
   }, [reader]);
   const openPanel = useCallback((p: Panel) => setPanel(p), []);
   // ---- search: remember where you were reading, so Esc can bring you back ----
@@ -214,17 +219,36 @@ export function Reader() {
   }, [panel, releaseSearch]);
 
   const onEscape = useCallback(() => {
+    // A card by the selection closes first; the next Esc goes back from search.
+    if (cardModeRef.current !== "pill") return dropSelection();
     goBack();
     setPanel(null);
-  }, [goBack]);
+  }, [goBack, dropSelection]);
 
-  // Look up the selected text on Google, in a new tab.
+  // Look up the selected text in a small card beside it.
   const lookup = useCallback(() => {
-    const q = (selectionRef.current ?? currentSelection())?.quote;
-    if (q) window.open(`https://www.google.com/search?q=${encodeURIComponent(q)}`, "_blank", "noopener");
+    if (panelRef.current) return;
+    const s = selectionRef.current ?? currentSelection();
+    if (!s) return;
+    setSelection(s);
+    setCardMode("lookup");
   }, [currentSelection]);
 
-  const frameKey = useReaderKeys(reader, keyToggle, onEscape, audio, openPanel, lookup);
+  // While the lookup card is open: W opens Wikipedia (or Wiktionary), G opens Google, in a new tab.
+  const lookupLinks = useRef<{ source: string | null; google: string } | null>(null);
+  const onLookupLinks = useCallback((l: { source: string | null; google: string }) => {
+    lookupLinks.current = l;
+  }, []);
+  const cardKey = useCallback((k: string) => {
+    const links = lookupLinks.current;
+    if (cardModeRef.current !== "lookup" || !links) return false;
+    const url = k === "w" ? links.source : k === "g" ? links.google : null;
+    if (!url) return false;
+    window.open(url, "_blank", "noopener");
+    return true;
+  }, []);
+
+  const frameKey = useReaderKeys(reader, keyToggle, onEscape, audio, openPanel, lookup, cardKey);
 
   // Taps on the page: left edge goes back, right edge goes forward, middle shows/hides controls.
   const onTap = useCallback(
@@ -381,10 +405,11 @@ export function Reader() {
         {selection && !panel && (
           <NoteCard
             selection={selection}
-            open={cardOpen}
+            mode={cardMode}
             chapter={toc[chapterIdx]?.label ?? null}
-            onOpen={() => setCardOpen(true)}
+            onOpen={() => setCardMode("note")}
           onLookup={lookup}
+          onLinks={onLookupLinks}
             onClose={dropSelection}
             onSave={async (text) => {
               await notes.add({
