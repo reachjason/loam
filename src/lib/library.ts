@@ -23,24 +23,42 @@ export type ReaderPrefs = {
   lineHeight: number;
   theme: "light" | "dark";
   showProgress: boolean;
+  /** Pause the audiobook while writing a note, resume on save. */
+  pauseForNotes: boolean;
 };
 
-export const DEFAULT_PREFS: ReaderPrefs = { fontSize: 105, lineHeight: 1.65, theme: "light", showProgress: true };
+export const DEFAULT_PREFS: ReaderPrefs = { fontSize: 105, lineHeight: 1.65, theme: "light", showProgress: true, pauseForNotes: true };
 
 interface LoamDB extends DBSchema {
   books: { key: string; value: Book; indexes: { openedAt: number } };
   files: { key: string; value: Blob };
   locations: { key: string; value: string }; // epub.js locations JSON, cached per book
+  notes: { key: string; value: Note; indexes: { bookId: string } };
 }
+
+export type Note = {
+  id: string;
+  bookId: string;
+  /** Where the note was written: a range CFI when it quotes a passage, otherwise the page's start. */
+  cfi: string;
+  chapter: string | null;
+  quote: string | null;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
+};
 
 let dbPromise: Promise<IDBPDatabase<LoamDB>> | null = null;
 
-function db() {
-  dbPromise ??= openDB<LoamDB>("loam", 1, {
-    upgrade(d) {
-      d.createObjectStore("books", { keyPath: "id" }).createIndex("openedAt", "openedAt");
-      d.createObjectStore("files");
-      d.createObjectStore("locations");
+export function db() {
+  dbPromise ??= openDB<LoamDB>("loam", 2, {
+    upgrade(d, oldVersion) {
+      if (oldVersion < 1) {
+        d.createObjectStore("books", { keyPath: "id" }).createIndex("openedAt", "openedAt");
+        d.createObjectStore("files");
+        d.createObjectStore("locations");
+      }
+      if (oldVersion < 2) d.createObjectStore("notes", { keyPath: "id" }).createIndex("bookId", "bookId");
     },
   });
   return dbPromise;
@@ -90,11 +108,15 @@ export async function addEpub(file: File): Promise<Book> {
 
 export async function removeBook(id: string) {
   const d = await db();
-  const tx = d.transaction(["books", "files", "locations"], "readwrite");
+  const tx = d.transaction(["books", "files", "locations", "notes"], "readwrite");
+  const notes = tx.objectStore("notes");
+  const noteIds = await notes.index("bookId").getAllKeys(id);
   await Promise.all([
     tx.objectStore("books").delete(id),
     tx.objectStore("files").delete(id),
+    tx.objectStore("files").delete(`${id}:audio`),
     tx.objectStore("locations").delete(id),
+    ...noteIds.map((k) => notes.delete(k)),
     tx.done,
   ]);
 }
@@ -145,4 +167,20 @@ async function readEpubMeta(file: File) {
     await book.ready.catch(() => {});
     book.destroy();
   }
+}
+
+/** What's attached to each book, for the shelf: note counts and whether an audiobook is stored. Reads keys only. */
+export async function shelfExtras(): Promise<{ notes: Map<string, number>; audio: Set<string> }> {
+  const d = await db();
+  const notes = new Map<string, number>();
+  let cursor = await d.transaction("notes").store.index("bookId").openKeyCursor();
+  while (cursor) {
+    const id = cursor.key as string;
+    notes.set(id, (notes.get(id) ?? 0) + 1);
+    cursor = await cursor.continue();
+  }
+  const audio = new Set(
+    (await d.getAllKeys("files")).flatMap((k) => (typeof k === "string" && k.endsWith(":audio") ? [k.slice(0, -6)] : [])),
+  );
+  return { notes, audio };
 }
