@@ -22,7 +22,11 @@ export type FrameEvents = {
   /** A tap, with its horizontal position as a fraction of the screen width (0 = left edge). */
   tap: (x: number) => void;
   activity: () => void;
+  /** Text selected in the book (with its on-screen box), or null when the selection goes away. */
+  select: (s: BookSelection | null) => void;
 };
+
+export type BookSelection = { cfi: string; quote: string; rect: { top: number; bottom: number; left: number; right: number } };
 
 const SWIPE_PX = 40;
 const TAP_PX = 10;
@@ -189,6 +193,29 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     );
   }, []);
 
+  /** The selection in the book right now (epub.js reports selections only after a short delay). */
+  const currentSelection = useCallback((): BookSelection | null => {
+    for (const c of (rendRef.current?.getContents() ?? []) as unknown as Contents[]) {
+      const sel = c.window.getSelection();
+      if (!sel?.rangeCount || sel.isCollapsed) continue;
+      const range = sel.getRangeAt(0);
+      const quote = range.toString().replace(/\s+/g, " ").trim();
+      const frame = c.window.frameElement?.getBoundingClientRect();
+      if (!quote || !frame) continue;
+      const r = range.getBoundingClientRect();
+      return {
+        cfi: c.cfiFromRange(range),
+        quote,
+        rect: { top: r.top + frame.top, bottom: r.bottom + frame.top, left: r.left + frame.left, right: r.right + frame.left },
+      };
+    }
+    return null;
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    for (const c of (rendRef.current?.getContents() ?? []) as unknown as Contents[]) c.window.getSelection()?.removeAllRanges();
+  }, []);
+
   /** Reading order of two CFIs (negative when `a` comes first). */
   const compareCfi = useCallback((a: string, b: string) => cfiRef.current?.compare(a, b) ?? 0, []);
 
@@ -286,6 +313,7 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
       };
 
       rendition.on("relocated", (loc: Location) => {
+        events.current.select(null);
         redrawMarks(rendition);
         if (movedRef.current || !anchorRef.current) {
           anchorRef.current = loc.start.cfi;
@@ -314,11 +342,26 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
 
       // Input from inside the iframe: keys, mouse activity, swipes and taps.
       rendition.on("keydown", (e: KeyboardEvent) => events.current.key(e));
+      rendition.on("selected", (cfi: string, contents: Contents) => {
+        const range = contents.range(cfi);
+        const quote = range.toString().replace(/\s+/g, " ").trim();
+        const frame = contents.window.frameElement?.getBoundingClientRect();
+        const r = range.getBoundingClientRect();
+        if (!quote || !frame) return;
+        events.current.select({
+          cfi,
+          quote,
+          rect: { top: r.top + frame.top, bottom: r.bottom + frame.top, left: r.left + frame.left, right: r.right + frame.left },
+        });
+      });
+      // A new press inside the book drops the old selection; "selected" fires again if a new one is made.
+      rendition.on("mousedown", () => events.current.select(null));
       rendition.on("mousemove", () => events.current.activity());
       let touch: { x: number; y: number; t: number } | null = null;
       rendition.on("touchstart", (e: TouchEvent) => {
         const p = e.changedTouches[0];
         touch = p ? { x: p.screenX, y: p.screenY, t: Date.now() } : null;
+        events.current.select(null);
       });
       rendition.on("touchend", (e: TouchEvent) => {
         const p = e.changedTouches[0];
@@ -414,6 +457,8 @@ export function useEpubReader(id: string, viewRef: RefObject<HTMLDivElement | nu
     pageRange,
     entryStarts,
     loadSections,
+    clearSelection,
+    currentSelection,
     highlight,
     unhighlight,
     compareCfi,

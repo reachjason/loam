@@ -7,12 +7,13 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { IDLE_MS, type Panel } from "./config";
 import { ContentsPanel } from "./contents-panel";
+import { NoteCard } from "./note-card";
 import { NotesPanel, type Draft } from "./notes-panel";
 import { ProgressFooter } from "./progress-footer";
 import { SettingsPanel } from "./settings-panel";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 import { TopBar } from "./top-bar";
-import { useEpubReader, type FrameEvents } from "./use-epub-reader";
+import { useEpubReader, type BookSelection, type FrameEvents } from "./use-epub-reader";
 import { ListenPanel } from "./listen-panel";
 import { SearchPanel } from "./search-panel";
 import { useBookSearch } from "./use-book-search";
@@ -26,7 +27,7 @@ export function Reader() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const viewRef = useRef<HTMLDivElement>(null);
-  const events = useRef<FrameEvents>({ key: () => {}, tap: () => {}, activity: () => {} });
+  const events = useRef<FrameEvents>({ key: () => {}, tap: () => {}, activity: () => {}, select: () => {} });
   const reader = useEpubReader(id, viewRef, events);
   const { meta, status, toc, chapterIdx, pagesLeft, percent, prefs, updatePrefs, next, prev, jumpTo, goTo, capture, highlight, unhighlight, flush } =
     reader;
@@ -58,6 +59,18 @@ export function Reader() {
   }, [poke]);
 
   // ---- notes: opening the panel captures the selected passage (or the current page) ----
+  // A passage selected in the book: offers a note card right beside it.
+  const [selection, setSelection] = useState<BookSelection | null>(null);
+  const [cardOpen, setCardOpen] = useState(false);
+  const selectionRef = useRef(selection);
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
+  const onSelect = useCallback((s: BookSelection | null) => {
+    setSelection(s);
+    if (!s) setCardOpen(false);
+  }, []);
+
   const [draft, setDraft] = useState<Draft | null>(null);
   const [focusNote, setFocusNote] = useState<string | null>(null);
   const togglePanel = useCallback(
@@ -71,6 +84,22 @@ export function Reader() {
     [capture],
   );
   const closePanel = useCallback(() => setPanel(null), []);
+  // W with a passage selected writes beside it; otherwise it opens the Notes list.
+  const { currentSelection } = reader;
+  const keyToggle = useCallback(
+    (p: Panel) => {
+      if (p === "notes" && !panelRef.current) {
+        const s = selectionRef.current ?? currentSelection();
+        if (s) {
+          setSelection(s);
+          setCardOpen(true);
+          return;
+        }
+      }
+      togglePanel(p);
+    },
+    [togglePanel, currentSelection],
+  );
   const openNote = useCallback(
     (id: string) => {
       setDraft(capture());
@@ -83,8 +112,34 @@ export function Reader() {
   const audio = useAudiobook(id, meta);
   const sync = useSync(id, reader, audio);
   const search = useBookSearch(reader);
+
+  // ---- pause the audiobook while writing a note; resume (a little earlier) on save or close ----
+  const pausedForNote = useRef(false);
+  const resumeAfterNote = useCallback(() => {
+    if (!pausedForNote.current) return;
+    pausedForNote.current = false;
+    audio.seek(audio.time - 2);
+    audio.play();
+  }, [audio]);
+  const writing = useRef(false); // a note is being written (panel or card)
+  useEffect(() => {
+    const was = writing.current;
+    const now = panel === "notes" || cardOpen;
+    writing.current = now;
+    if (now && !was && prefs.pauseForNotes && audio.playing) {
+      pausedForNote.current = true;
+      audio.pause();
+    }
+    if (was && !now) resumeAfterNote();
+  }, [panel, cardOpen, prefs.pauseForNotes, audio, resumeAfterNote]);
+
+  const dropSelection = useCallback(() => {
+    reader.clearSelection();
+    setSelection(null);
+    setCardOpen(false);
+  }, [reader]);
   const openPanel = useCallback((p: Panel) => setPanel(p), []);
-  const frameKey = useReaderKeys(reader, togglePanel, closePanel, audio, openPanel);
+  const frameKey = useReaderKeys(reader, keyToggle, closePanel, audio, openPanel);
 
   // Taps on the page: left edge goes back, right edge goes forward, middle shows/hides controls.
   const onTap = useCallback(
@@ -98,8 +153,8 @@ export function Reader() {
   );
 
   useEffect(() => {
-    events.current = { key: frameKey, tap: onTap, activity: poke };
-  }, [frameKey, onTap, poke]);
+    events.current = { key: frameKey, tap: onTap, activity: poke, select: onSelect };
+  }, [frameKey, onTap, poke, onSelect]);
 
   const showChrome = chrome || panel !== null || status !== "ready";
   const showMini = status === "ready" && !!audio.file && audio.started && panel !== "listen";
@@ -176,6 +231,19 @@ export function Reader() {
           }}
         />
       )}
+      {selection && !panel && (
+        <NoteCard
+          selection={selection}
+          open={cardOpen}
+          chapter={toc[chapterIdx]?.label ?? null}
+          onOpen={() => setCardOpen(true)}
+          onClose={dropSelection}
+          onSave={async (text) => {
+            await notes.add({ cfi: selection.cfi, quote: selection.quote, chapter: toc[chapterIdx]?.label ?? null, text });
+            dropSelection();
+          }}
+        />
+      )}
       {panel === "notes" && (
         <NotesPanel
           notes={notes.notes}
@@ -187,6 +255,7 @@ export function Reader() {
             const note = await notes.add({ ...draft, text });
             setFocusNote(note.id);
             setDraft(capture());
+            resumeAfterNote();
           }}
           onEdit={notes.edit}
           onRemove={notes.remove}

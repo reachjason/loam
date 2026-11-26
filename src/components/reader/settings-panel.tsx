@@ -58,6 +58,9 @@ export function SettingsPanel({
             ))}
           </div>
         </Row>
+        <Row label="Pause audio for notes">
+          <Switch on={prefs.pauseForNotes} label="Pause audio while writing notes" onToggle={() => onChange({ pauseForNotes: !prefs.pauseForNotes })} />
+        </Row>
         <Row label="Progress">
           <button
             type="button"
@@ -88,5 +91,15 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <span className="text-sm text-muted-foreground">{label}</span>
       <div className="flex items-center gap-1">{children}</div>
     </div>
+  );
+}
+
+function Switch({ on, label, onToggle }: { on: boolean; label: string; onToggle: () => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onToggle} className="flex h-11 items-center">
+      <span className={cn("relative h-5 w-9 rounded-full transition-colors", on ? "bg-primary" : "bg-muted-foreground/30")}>
+        <span className={cn("absolute top-0.5 left-0.5 size-4 rounded-full bg-card shadow transition-transform", on && "translate-x-4")} />
+      </span>
+    </button>
   );
 }

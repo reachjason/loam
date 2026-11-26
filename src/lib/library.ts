@@ -23,9 +23,11 @@ export type ReaderPrefs = {
   lineHeight: number;
   theme: "light" | "dark";
   showProgress: boolean;
+  /** Pause the audiobook while writing a note, resume on save. */
+  pauseForNotes: boolean;
 };
 
-export const DEFAULT_PREFS: ReaderPrefs = { fontSize: 105, lineHeight: 1.65, theme: "light", showProgress: true };
+export const DEFAULT_PREFS: ReaderPrefs = { fontSize: 105, lineHeight: 1.65, theme: "light", showProgress: true, pauseForNotes: true };
 
 interface LoamDB extends DBSchema {
   books: { key: string; value: Book; indexes: { openedAt: number } };

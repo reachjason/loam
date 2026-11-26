@@ -123,6 +123,10 @@ export function useAudiobook(bookId: string, meta: Book | null) {
     if (a.paused) a.play().catch(() => setError("Playback was blocked. Press play again."));
     else a.pause();
   }, []);
+  const pause = useCallback(() => audioRef.current?.pause(), []);
+  const play = useCallback(() => {
+    audioRef.current?.play().catch(() => setError("Playback was blocked. Press play again."));
+  }, []);
   const seek = useCallback((t: number) => {
     const a = audioRef.current;
     if (!a?.src) return;
@@ -194,7 +198,7 @@ export function useAudiobook(bookId: string, meta: Book | null) {
     };
   }, [file, toggle, skip, seek, goChapter]);
 
-  return { file, chapters, chapterIdx, playing, started, time, duration, rate, error, attach, detach, toggle, seek, skip, setRate, goChapter };
+  return { file, chapters, chapterIdx, playing, started, time, duration, rate, error, attach, detach, toggle, pause, play, seek, skip, setRate, goChapter };
 }
 
 export type Audiobook = ReturnType<typeof useAudiobook>;
