@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Fraunces, Geist, Geist_Mono } from "next/font/google";
+import { ServiceWorker } from "@/components/service-worker";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
@@ -14,6 +15,9 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: "Loam — read deeply",
   description: "A quiet place to focus and take in what you're reading.",
+  applicationName: "Loam",
+  // Installed on iPhone/iPad: open full-screen with the parchment status bar.
+  appleWebApp: { capable: true, title: "Loam", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
@@ -34,6 +38,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="relative min-h-full flex flex-col">
         <TooltipProvider delay={400}>{children}</TooltipProvider>
+        <ServiceWorker />
       </body>
     </html>
   );
